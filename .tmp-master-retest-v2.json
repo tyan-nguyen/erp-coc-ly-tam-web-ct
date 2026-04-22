@@ -1,0 +1,74 @@
+[
+  {
+    "module": "dm_duan",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.dm_duan WHERE kh_id='6a1e24f5-aaaf-4831-a29f-79537dcf0186';"
+    ]
+  },
+  {
+    "module": "dm_kh",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.dm_kh WHERE kh_id='210228a0-6b01-49ae-9615-fc7317a6563b';"
+    ]
+  },
+  {
+    "module": "dm_ncc",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.dm_ncc WHERE ncc_id='8f39ed5e-9ff9-4945-95ad-4f77f9dfd612';"
+    ]
+  },
+  {
+    "module": "nvl",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.nvl WHERE nvl_id='fc1e9716-bdc0-4659-9349-6a10884f3c68';"
+    ]
+  },
+  {
+    "module": "gia_nvl",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS create/edit; soft-delete N/A by schema",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.gia_nvl WHERE gia_nvl_id='8e4a3242-29c1-4d2a-96a5-21baa73e021f';"
+    ]
+  },
+  {
+    "module": "dm_coc_template",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.dm_coc_template WHERE template_id='211001b2-15d0-4de2-8b18-db3e0c30963d';"
+    ]
+  },
+  {
+    "module": "dm_dinh_muc_phu_md",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.dm_dinh_muc_phu_md WHERE dm_id='a49209c3-f2dd-4abf-ac21-ea8e13831bd7';"
+    ]
+  },
+  {
+    "module": "dm_capphoi_bt",
+    "expected": "create/edit/soft-delete + DB verify",
+    "actual": "PASS soft-delete (row hidden by RLS after update)",
+    "pass": true,
+    "sql_verify": [
+      "SELECT * FROM public.dm_capphoi_bt WHERE cp_id='5bac725d-a4b8-42a9-ab89-b38ac2d7db55';"
+    ]
+  }
+]

@@ -1,0 +1,206 @@
+import type { RowData } from '@/lib/master-data/crud-utils'
+
+const TEMPLATE_META_PREFIX = 'ERP_TEMPLATE_META::'
+const TEMPLATE_NVL_FIELDS = [
+  'pc_nvl_id',
+  'thep_pc_nvl_id',
+  'dai_nvl_id',
+  'thep_dai_nvl_id',
+  'buoc_nvl_id',
+  'thep_buoc_nvl_id',
+  'mat_bich_nvl_id',
+  'mang_xong_nvl_id',
+  'tap_nvl_id',
+  'tap_vuong_nvl_id',
+  'mui_coc_nvl_id',
+] as const
+
+function safeString(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+type TemplateUsageShape = {
+  loai_coc?: unknown
+  mac_be_tong?: unknown
+  do_ngoai?: unknown
+  chieu_day?: unknown
+}
+
+type SelectResult = Promise<{ data: unknown[] | null; error: { message: string } | null }>
+
+type QuerySupabaseLike = {
+  from: (tableName: string) => {
+    select: (columns: string) => {
+      limit: (count: number) => SelectResult
+      eq?: (field: string, value: unknown) => unknown
+    }
+  }
+}
+
+function buildTemplateUsageKey(row: TemplateUsageShape) {
+  return [
+    safeString(row.loai_coc),
+    safeString(row.mac_be_tong),
+    safeString(row.do_ngoai),
+    safeString(row.chieu_day),
+  ].join('|')
+}
+
+function parseTemplateMeta(row: RowData) {
+  const ghiChu = safeString(row.ghi_chu)
+  if (!ghiChu.startsWith(TEMPLATE_META_PREFIX)) return {}
+  try {
+    return JSON.parse(ghiChu.slice(TEMPLATE_META_PREFIX.length)) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+function readTemplateNvlIds(row: RowData) {
+  const ids = new Set<string>()
+  for (const field of TEMPLATE_NVL_FIELDS) {
+    const value = safeString(row[field])
+    if (value) ids.add(value)
+  }
+  const meta = parseTemplateMeta(row)
+  for (const field of TEMPLATE_NVL_FIELDS) {
+    const value = safeString(meta[field])
+    if (value) ids.add(value)
+  }
+  return ids
+}
+
+function buildUsageMessage(reasons: string[], fallback: string) {
+  if (reasons.length === 0) return fallback
+  return `${fallback} - ${reasons.join(', ')}`
+}
+
+export async function buildNvlUsageMap(
+  supabase: QuerySupabaseLike,
+  ids: string[]
+) {
+  const targetIds = new Set(ids.filter(Boolean))
+  const reasonMap = new Map<string, Set<string>>()
+
+  function addReason(id: string, reason: string) {
+    if (!targetIds.has(id)) return
+    const current = reasonMap.get(id) ?? new Set<string>()
+    current.add(reason)
+    reasonMap.set(id, current)
+  }
+
+  const [auxRows, mixRows, itemRows, templateRows] = await Promise.all([
+    supabase.from('dm_dinh_muc_phu_md').select('nvl_id').limit(2000),
+    supabase.from('dm_capphoi_bt').select('nvl_id').limit(2000),
+    supabase.from('boc_tach_nvl_items').select('nvl_id').limit(3000),
+    supabase.from('dm_coc_template').select('*').limit(500),
+  ])
+
+  for (const result of [auxRows, mixRows, itemRows, templateRows]) {
+    if (result.error) throw new Error(result.error.message)
+  }
+
+  for (const row of (auxRows.data ?? []) as RowData[]) {
+    addReason(safeString(row.nvl_id), 'Định mức vật tư phụ')
+  }
+  for (const row of (mixRows.data ?? []) as RowData[]) {
+    addReason(safeString(row.nvl_id), 'Cấp phối bê tông')
+  }
+  for (const row of (itemRows.data ?? []) as RowData[]) {
+    addReason(safeString(row.nvl_id), 'Bóc tách')
+  }
+  for (const row of (templateRows.data ?? []) as RowData[]) {
+    for (const id of readTemplateNvlIds(row)) {
+      addReason(id, 'Loại cọc mẫu')
+    }
+  }
+
+  const messageMap = new Map<string, string>()
+  for (const id of ids) {
+    const reasons = [...(reasonMap.get(id) ?? new Set<string>())]
+    if (reasons.length > 0) {
+      messageMap.set(
+        id,
+        buildUsageMessage(reasons, 'Đã phát sinh chứng từ')
+      )
+    }
+  }
+
+  return messageMap
+}
+
+export async function getNvlUsageMessage(
+  supabase: QuerySupabaseLike,
+  id: string
+) {
+  const map = await buildNvlUsageMap(supabase, [id])
+  return map.get(id) ?? ''
+}
+
+export async function buildTemplateUsageMap(
+  supabase: QuerySupabaseLike,
+  rows: RowData[]
+) {
+  const templateKeys = new Set(rows.map((row) => buildTemplateUsageKey(row)))
+  const { data, error } = await supabase
+    .from('boc_tach_nvl')
+    .select('loai_coc, mac_be_tong, do_ngoai, chieu_day')
+    .limit(3000)
+
+  if (error) throw new Error(error.message)
+
+  const usedKeys = new Set(
+    ((data ?? []) as RowData[])
+      .map((row) => buildTemplateUsageKey(row))
+      .filter((key) => templateKeys.has(key))
+  )
+
+  const messageMap = new Map<string, string>()
+  for (const row of rows) {
+    const key = buildTemplateUsageKey(row)
+    if (!usedKeys.has(key)) continue
+    messageMap.set(
+      key,
+      'Đã phát sinh chứng từ - Bóc tách'
+    )
+  }
+
+  return messageMap
+}
+
+export async function getTemplateUsageMessage(
+  supabase: {
+    from: (tableName: string) => {
+      select: (columns: string) => {
+        eq: (field: string, value: unknown) => {
+          eq: (field: string, value: unknown) => {
+            eq: (field: string, value: unknown) => {
+              eq: (field: string, value: unknown) => {
+                limit: (count: number) => Promise<{ data: unknown[] | null; error: { message: string } | null }>
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  row: TemplateUsageShape
+) {
+  const result = await supabase
+    .from('boc_tach_nvl')
+    .select('boc_id')
+    .eq('loai_coc', safeString(row.loai_coc))
+    .eq('mac_be_tong', safeString(row.mac_be_tong))
+    .eq('do_ngoai', Number(row.do_ngoai ?? 0))
+    .eq('chieu_day', Number(row.chieu_day ?? 0))
+    .limit(1)
+
+  if (result.error) throw new Error(result.error.message)
+  if ((result.data ?? []).length === 0) return ''
+
+  return 'Đã phát sinh chứng từ - Bóc tách'
+}
+
+export function buildTemplateUsageKeyFromRow(row: TemplateUsageShape) {
+  return buildTemplateUsageKey(row)
+}

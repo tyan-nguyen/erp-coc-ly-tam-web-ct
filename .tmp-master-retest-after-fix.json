@@ -1,0 +1,82 @@
+[
+  {
+    "module": "dm_kh",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "row missing after soft delete",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.dm_kh ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "dm_duan",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "create fail: Thieu field bat buoc: kh_id",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.dm_duan ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "dm_ncc",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "row missing after soft delete",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.dm_ncc ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "nvl",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "row missing after soft delete",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.nvl ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "gia_nvl",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "db verify edit mismatch",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.gia_nvl ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "dm_coc_template",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "row missing after soft delete",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.dm_coc_template ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "dm_dinh_muc_phu_md",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "db verify edit mismatch",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.dm_dinh_muc_phu_md ORDER BY 1 DESC LIMIT 20;"
+    ]
+  },
+  {
+    "module": "dm_capphoi_bt",
+    "testcase": "create/edit/soft-delete",
+    "expected": "CRUD pass + DB verify",
+    "actual": "db verify edit mismatch",
+    "pass": false,
+    "sql_verify": [
+      "SELECT * FROM public.dm_capphoi_bt ORDER BY 1 DESC LIMIT 20;"
+    ]
+  }
+]

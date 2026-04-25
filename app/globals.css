@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+:root {
+  --color-primary: #02567a;
+  --color-accent: #ed1c22;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-background: #f7f9fb;
+  --color-surface: #ffffff;
+  --color-border: #d9e2e8;
+  --color-text: #0f172a;
+  --color-text-muted: #475569;
+  --background: var(--color-background);
+  --foreground: var(--color-text);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+a {
+  color: inherit;
+}
+
+.app-shell {
+  background: var(--color-background);
+  color: var(--color-text);
+}
+
+.app-surface {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.app-muted {
+  color: var(--color-text-muted);
+}
+
+.app-primary {
+  background: var(--color-primary);
+  color: var(--color-white);
+}
+
+.app-primary:hover {
+  filter: brightness(0.94);
+}
+
+.app-primary-soft {
+  background: color-mix(in srgb, var(--color-primary) 10%, white);
+  color: var(--color-primary);
+}
+
+.app-accent-soft {
+  background: color-mix(in srgb, var(--color-accent) 10%, white);
+  color: var(--color-accent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 20%, white);
+}
+
+.app-outline {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.app-outline:hover {
+  background: color-mix(in srgb, var(--color-primary) 6%, white);
+}
+
+.app-nav {
+  color: color-mix(in srgb, var(--color-white) 88%, transparent);
+}
+
+.app-nav:hover {
+  background: color-mix(in srgb, var(--color-white) 14%, transparent);
+  color: var(--color-white);
+}
+
+.app-input {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.app-input:focus {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 18%, white);
+  outline-offset: 1px;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

@@ -20,6 +20,8 @@ function safeString(value: unknown) {
 }
 
 type TemplateUsageShape = {
+  template_id?: unknown
+  ma_coc?: unknown
   loai_coc?: unknown
   mac_be_tong?: unknown
   do_ngoai?: unknown
@@ -38,12 +40,7 @@ type QuerySupabaseLike = {
 }
 
 function buildTemplateUsageKey(row: TemplateUsageShape) {
-  return [
-    safeString(row.loai_coc),
-    safeString(row.mac_be_tong),
-    safeString(row.do_ngoai),
-    safeString(row.chieu_day),
-  ].join('|')
+  return safeString(row.template_id) || safeString(row.ma_coc)
 }
 
 function parseTemplateMeta(row: RowData) {
@@ -141,10 +138,10 @@ export async function buildTemplateUsageMap(
   supabase: QuerySupabaseLike,
   rows: RowData[]
 ) {
-  const templateKeys = new Set(rows.map((row) => buildTemplateUsageKey(row)))
+  const templateKeys = new Set(rows.map((row) => buildTemplateUsageKey(row)).filter(Boolean))
   const { data, error } = await supabase
     .from('boc_tach_nvl')
-    .select('loai_coc, mac_be_tong, do_ngoai, chieu_day')
+    .select('template_id, ma_coc, loai_coc, mac_be_tong, do_ngoai, chieu_day')
     .limit(3000)
 
   if (error) throw new Error(error.message)
@@ -158,6 +155,7 @@ export async function buildTemplateUsageMap(
   const messageMap = new Map<string, string>()
   for (const row of rows) {
     const key = buildTemplateUsageKey(row)
+    if (!key) continue
     if (!usedKeys.has(key)) continue
     messageMap.set(
       key,
@@ -186,17 +184,17 @@ export async function getTemplateUsageMessage(
   },
   row: TemplateUsageShape
 ) {
-  const result = await supabase
-    .from('boc_tach_nvl')
-    .select('boc_id')
-    .eq('loai_coc', safeString(row.loai_coc))
-    .eq('mac_be_tong', safeString(row.mac_be_tong))
-    .eq('do_ngoai', Number(row.do_ngoai ?? 0))
-    .eq('chieu_day', Number(row.chieu_day ?? 0))
-    .limit(1)
+  const templateId = safeString(row.template_id)
+  const maCoc = safeString(row.ma_coc)
+  if (!templateId && !maCoc) return ''
+  const scopedResult = templateId
+    ? await supabase.from('boc_tach_nvl').select('boc_id').eq('template_id', templateId).limit(1)
+    : maCoc
+      ? await supabase.from('boc_tach_nvl').select('boc_id').eq('ma_coc', maCoc).limit(1)
+      : Promise.resolve({ data: [], error: null })
 
-  if (result.error) throw new Error(result.error.message)
-  if ((result.data ?? []).length === 0) return ''
+  if (scopedResult.error) throw new Error(scopedResult.error.message)
+  if ((scopedResult.data ?? []).length === 0) return ''
 
   return 'Đã phát sinh chứng từ - Bóc tách'
 }

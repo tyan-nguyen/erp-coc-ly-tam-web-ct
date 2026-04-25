@@ -4,6 +4,8 @@ type AnySupabase = Parameters<typeof createOpeningBalanceLotAndSerials>[0]
 
 export type CreateFinishedGoodsOpeningBalanceBody = {
   openingDate?: string
+  templateId?: string
+  maCoc?: string
   loaiCoc?: string
   tenDoan?: string
   chieuDaiM?: number
@@ -20,6 +22,8 @@ export async function executeCreateFinishedGoodsOpeningBalanceMutation(input: {
 }) {
   return createOpeningBalanceLotAndSerials(input.supabase, {
     openingDate: String(input.body.openingDate || '').trim(),
+    templateId: String(input.body.templateId || '').trim(),
+    maCoc: String(input.body.maCoc || '').trim(),
     loaiCoc: String(input.body.loaiCoc || '').trim(),
     tenDoan: String(input.body.tenDoan || '').trim(),
     chieuDaiM: Number(input.body.chieuDaiM || 0),

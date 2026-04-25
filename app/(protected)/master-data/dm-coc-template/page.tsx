@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { DmCocTemplateListClient } from '@/components/master-data/master-data-list-extras'
 import { DmCocTemplateFields } from '@/components/master-data/dm-coc-template-fields'
@@ -443,15 +442,16 @@ function getCuongDoRank(row: RowData) {
 }
 
 function resolveTemplateCode(row: RowData) {
-  for (const field of ['ma_coc_template', 'ma_coc']) {
+  for (const field of ['ma_coc', 'ma_coc_template']) {
     const value = String(row[field] ?? '').trim()
     if (value) return value
   }
   const mac = String(row.mac_be_tong ?? '').trim()
   const steelGrade = extractSteelGrade(String(row.mac_thep ?? row.loai_coc ?? ''))
   const diameter = String(row.do_ngoai ?? '').trim()
-  if (!mac || !steelGrade || !diameter) return '-'
-  return `M${mac} - ${steelGrade}${diameter}`
+  const thickness = String(row.chieu_day ?? '').trim()
+  if (!mac || !steelGrade || !diameter || !thickness) return '-'
+  return `M${mac} - ${steelGrade}${diameter} - ${thickness}`
 }
 
 function buildTemplateCodeMap(rows: RowData[], keyField: string | null) {
@@ -469,16 +469,17 @@ function buildTemplateCodeMap(rows: RowData[], keyField: string | null) {
     const mac = String(row.mac_be_tong ?? '').trim()
     const steelGrade = extractSteelGrade(String(row.mac_thep ?? row.loai_coc ?? ''))
     const diameter = String(row.do_ngoai ?? '').trim()
+    const thickness = String(row.chieu_day ?? '').trim()
     const rowKey = String(row[keyField ?? 'template_id'] ?? '')
     if (!rowKey) continue
-    if (!mac || !steelGrade || !diameter) {
+    if (!mac || !steelGrade || !diameter || !thickness) {
       map.set(rowKey, explicit)
       continue
     }
-    const prefix = `M${mac} - ${steelGrade}${diameter}`
+    const prefix = `M${mac} - ${steelGrade}${diameter} - ${thickness}`
     const next = (counts.get(prefix) ?? 0) + 1
     counts.set(prefix, next)
-    map.set(rowKey, explicit.includes(' - ') && /\s-\s\d+$/.test(explicit) ? explicit : `${prefix} - ${next}`)
+    map.set(rowKey, explicit.startsWith(`${prefix} - `) ? explicit : `${prefix} - ${next}`)
   }
 
   return map
@@ -536,54 +537,4 @@ function normalizeConcreteGradeOption(value: unknown) {
   const numeric = Number(match[match.length - 1].replace(',', '.'))
   if (!Number.isFinite(numeric) || numeric < 100 || numeric > 2000) return ''
   return String(Math.round(numeric))
-}
-
-function buildPageHref({
-  q,
-  showInactive,
-  editKey,
-  page,
-}: {
-  q: string
-  showInactive: boolean
-  editKey: string
-  page: number
-}) {
-  const params = new URLSearchParams()
-  if (q) params.set('q', q)
-  if (showInactive) params.set('show_inactive', '1')
-  if (editKey) params.set('edit_key', editKey)
-  params.set('page', String(Math.max(page, 1)))
-  return `${BASE_PATH}?${params.toString()}`
-}
-
-function buildPageNumbers(totalPages: number, currentPage: number) {
-  const pages = new Set<number>([1, totalPages, currentPage - 1, currentPage, currentPage + 1])
-  return [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b)
-}
-
-function PaginationLink({
-  href,
-  disabled,
-  active,
-  children,
-}: {
-  href: string
-  disabled?: boolean
-  active?: boolean
-  children: ReactNode
-}) {
-  const className = active
-    ? 'app-primary inline-flex h-9 min-w-9 items-center justify-center rounded-lg px-3 text-sm font-semibold'
-    : 'app-outline inline-flex h-9 min-w-9 items-center justify-center rounded-lg px-3 text-sm font-semibold transition'
-
-  if (disabled) {
-    return (
-      <span className={`${className} opacity-40`} aria-disabled="true">
-        {children}
-      </span>
-    )
-  }
-
-  return <Link href={href} className={className}>{children}</Link>
 }

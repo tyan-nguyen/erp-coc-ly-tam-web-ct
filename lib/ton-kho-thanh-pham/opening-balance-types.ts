@@ -10,6 +10,9 @@ export type FinishedGoodsOpeningBalanceLocationOption = {
 export type FinishedGoodsOpeningBalanceLoaiCocOption = {
   value: string
   label: string
+  templateId: string
+  maCoc: string
+  loaiCoc: string
 }
 
 export type FinishedGoodsOpeningBalanceLotRow = {
@@ -19,6 +22,8 @@ export type FinishedGoodsOpeningBalanceLotRow = {
   countSheetCode: string
   countSheetStatus: string
   openingDate: string
+  templateId: string
+  maCoc: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number

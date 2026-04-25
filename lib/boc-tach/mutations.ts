@@ -1,4 +1,4 @@
-import { saveBocTach, deleteBocTachHeaders } from '@/lib/boc-tach/repository'
+import { saveBocTach, deleteBocTachHeaders, reopenBocTach } from '@/lib/boc-tach/repository'
 import type { BocTachDetailPayload } from '@/lib/boc-tach/types'
 
 type AnySupabase = Parameters<typeof saveBocTach>[0]
@@ -49,4 +49,17 @@ export async function executeBulkDeleteBocTachMutation(input: {
   }
 
   return deleteBocTachHeaders(input.supabase, input.ids)
+}
+
+export async function executeReopenBocTachMutation(input: {
+  supabase: AnySupabase
+  bocId: string
+  userId: string
+  userRole: string
+}) {
+  return reopenBocTach(input.supabase, {
+    bocId: input.bocId,
+    userId: input.userId,
+    userRole: input.userRole,
+  })
 }

@@ -12,7 +12,7 @@ const BASE_PATH = '/master-data/dm-coc-template'
 const TEMPLATE_META_PREFIX = 'ERP_TEMPLATE_META::'
 
 const CANDIDATE_COLUMNS = {
-  code: ['ma_coc_template', 'ma_coc'],
+  code: ['ma_coc', 'ma_coc_template'],
   steelGrade: ['mac_thep'],
   cuongDo: ['cuong_do'],
   pcNvlId: ['pc_nvl_id', 'thep_pc_nvl_id'],
@@ -77,6 +77,10 @@ function hasInput(formData: FormData, name: string) {
 
 function isTemplateDuplicateKeyError(message: string) {
   return message.includes('dm_coc_template_loai_coc_do_ngoai_chieu_day_key')
+}
+
+function duplicateTemplateSchemaMessage() {
+  return 'Database đang khóa trùng theo loại cọc/cường độ/đường kính/thành cọc. Cần chạy SQL bỏ khóa cũ để cho phép nhiều mã cọc cùng thông số cơ bản nhưng khác định mức/phụ kiện.'
 }
 
 function buildStoredNote(note: string | null, metadata: Record<string, unknown>) {
@@ -180,8 +184,8 @@ function buildLoaiCoc(cuongDo: string, steelGrade: string, doNgoai: number, chie
   return `${cuongDo} - ${steelGrade}${doNgoai} - ${chieuDay}`
 }
 
-function buildCodePrefix(macBeTong: string, steelGrade: string, doNgoai: number) {
-  return `M${macBeTong} - ${steelGrade}${doNgoai}`
+function buildCodePrefix(macBeTong: string, steelGrade: string, doNgoai: number, chieuDay: number) {
+  return `M${macBeTong} - ${steelGrade}${doNgoai} - ${chieuDay}`
 }
 
 function extractSteelGrade(row: RowData) {
@@ -213,9 +217,10 @@ function buildTemplateCodeMap(rows: RowData[], keyField: string | null) {
   for (const row of sorted) {
     const macBeTong = String(row.mac_be_tong ?? '').trim()
     const doNgoai = Number(row.do_ngoai ?? 0)
+    const chieuDay = Number(row.chieu_day ?? 0)
     const steelGrade = extractSteelGrade(row)
-    if (!macBeTong || !doNgoai || !steelGrade) continue
-    const prefix = buildCodePrefix(macBeTong, steelGrade, doNgoai)
+    if (!macBeTong || !doNgoai || !chieuDay || !steelGrade) continue
+    const prefix = buildCodePrefix(macBeTong, steelGrade, doNgoai, chieuDay)
     const next = (prefixCount.get(prefix) ?? 0) + 1
     prefixCount.set(prefix, next)
     const rowKey = String(row[keyField ?? 'template_id'] ?? '')
@@ -332,13 +337,14 @@ async function buildTemplatePayload(formData: FormData, userId: string, isUpdate
     redirectWithError(`Loại cọc này đã tồn tại: ${existingCode}`)
   }
 
-  const codePrefix = buildCodePrefix(macBeTong, steelGrade, doNgoai)
+  const codePrefix = buildCodePrefix(macBeTong, steelGrade, doNgoai, chieuDay)
   const siblingCount = existingRows.filter((row) => {
     if (row.is_active === false) return false
     if (currentKeyValue && safeString(row[keyField ?? 'template_id']) === currentKeyValue) return false
     return (
       String(row.mac_be_tong ?? '').trim() === macBeTong &&
       Number(row.do_ngoai ?? 0) === doNgoai &&
+      Number(row.chieu_day ?? 0) === chieuDay &&
       extractSteelGrade(row) === steelGrade
     )
   }).length
@@ -435,7 +441,7 @@ export async function createDmCocTemplateAction(formData: FormData) {
   const result = await executeInsertWithFallback(supabase, payload)
   if (result.error) {
     if (isTemplateDuplicateKeyError(result.error.message)) {
-      redirectWithError('Loại cọc này đã tồn tại với cùng cường độ, đường kính ngoài và thành cọc.')
+      redirectWithError(duplicateTemplateSchemaMessage())
     }
     redirectWithError(result.error.message)
   }
@@ -481,7 +487,7 @@ export async function updateDmCocTemplateAction(formData: FormData) {
   const result = await executeUpdateWithFallback(supabase, keyField as string, keyValue, payload)
   if (result.error) {
     if (isTemplateDuplicateKeyError(result.error.message)) {
-      redirectWithError('Loại cọc này đã tồn tại với cùng cường độ, đường kính ngoài và thành cọc.')
+      redirectWithError(duplicateTemplateSchemaMessage())
     }
     redirectWithError(result.error.message)
   }

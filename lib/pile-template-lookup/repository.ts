@@ -125,12 +125,14 @@ export type PileTemplateLookupPageData = {
   nearMatches: PileTemplateLookupRow[]
 }
 
-export async function loadPileTemplateDetailByLoaiCoc(
+export async function loadPileTemplateDetailByIdentity(
   supabase: SupabaseClient,
-  loaiCoc: string
+  identity: { templateId?: string | null; maCoc?: string | null; loaiCoc?: string | null }
 ): Promise<PileTemplateLookupRow | null> {
-  const normalizedTarget = normalizeSearch(loaiCoc)
-  if (!normalizedTarget) return null
+  const normalizedTemplateId = normalizeText(identity.templateId)
+  const normalizedMaCoc = normalizeSearch(identity.maCoc)
+  const normalizedLoaiCoc = normalizeSearch(identity.loaiCoc)
+  if (!normalizedTemplateId && !normalizedMaCoc && !normalizedLoaiCoc) return null
 
   const [{ data: templateRows, error: templateError }, { data: nvlRows, error: nvlError }] = await Promise.all([
     supabase.from('dm_coc_template').select('*').eq('is_active', true).limit(500),
@@ -151,7 +153,10 @@ export async function loadPileTemplateDetailByLoaiCoc(
 
   const matched = templates.find(
     (candidate) =>
-      normalizeSearch(candidate.loaiCoc) === normalizedTarget || normalizeSearch(candidate.maCoc) === normalizedTarget
+      (normalizedTemplateId && candidate.templateId === normalizedTemplateId) ||
+      (normalizedMaCoc && normalizeSearch(candidate.maCoc) === normalizedMaCoc) ||
+      (normalizedLoaiCoc &&
+        (normalizeSearch(candidate.loaiCoc) === normalizedLoaiCoc || normalizeSearch(candidate.maCoc) === normalizedLoaiCoc))
   )
 
   if (!matched) return null
@@ -292,7 +297,7 @@ function parseMaterialDiameter(value: string) {
 }
 
 function resolveTemplateCode(row: RawTemplateRow) {
-  const direct = readStringCandidate(row, ['ma_coc_template', 'ma_coc', 'ma_template', 'loai_coc'])
+  const direct = readStringCandidate(row, ['ma_coc', 'ma_coc_template', 'ma_template', 'loai_coc'])
   if (direct) return direct
 
   const macBeTong = readStringCandidate(row, ['mac_be_tong'])

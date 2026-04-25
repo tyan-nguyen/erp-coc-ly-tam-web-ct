@@ -3,6 +3,7 @@ export type HeaderStatus = 'NHAP' | 'DA_GUI' | 'TRA_LAI' | 'DA_DUYET_QLSX' | 'HU
 export type BocTachHeaderInput = {
   da_id: string
   kh_id: string
+  ma_coc?: string
   loai_coc: string
   do_ngoai: number
   chieu_day: number
@@ -39,6 +40,8 @@ export type BocTachHeaderInput = {
 }
 
 export type BocTachSegmentInput = {
+  template_id?: string
+  ma_coc?: string
   ten_doan: string
   len_m: number
   cnt: number
@@ -184,6 +187,7 @@ export type AuxiliaryMaterialPreview = {
 export type PileTemplateReference = {
   template_id: string
   label: string
+  ma_coc?: string
   template_scope?: 'FACTORY' | 'CUSTOM'
   loai_coc?: string
   mac_be_tong?: string

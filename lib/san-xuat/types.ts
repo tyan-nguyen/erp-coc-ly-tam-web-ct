@@ -23,6 +23,8 @@ export type KeHoachLineRow = {
   ma_bao_gia: string | null
   khach_hang: string | null
   du_an: string | null
+  template_id?: string | null
+  ma_coc?: string | null
   loai_coc: string | null
   doan_key: string
   ten_doan: string
@@ -57,6 +59,8 @@ export type AvailableSegmentOption = {
   maBaoGia: string | null
   khachHang: string
   duAn: string
+  templateId?: string | null
+  maCoc?: string | null
   loaiCoc: string
   doanKey: string
   tenDoan: string

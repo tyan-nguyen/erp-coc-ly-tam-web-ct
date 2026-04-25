@@ -24,6 +24,26 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat('vi-VN').format(date)
 }
 
+function isUuidText(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || '').trim())
+}
+
+function buildDisplayItemLabel(row: {
+  itemLabel: string
+  maCoc?: string
+  loaiCoc: string
+  tenDoan?: string
+  chieuDaiM?: number
+}) {
+  const maCoc = String(row.maCoc || '').trim()
+  const tenDoan = String(row.tenDoan || '').trim()
+  const chieuDaiM = Number(row.chieuDaiM)
+  if (maCoc && !isUuidText(maCoc) && tenDoan && Number.isFinite(chieuDaiM) && chieuDaiM > 0) {
+    return `${maCoc} | ${row.tenDoan} | ${row.chieuDaiM}m`
+  }
+  return row.itemLabel
+}
+
 function formatStatusLabel(value: string) {
   const normalized = String(value || '').trim()
   if (!normalized) return '-'
@@ -275,6 +295,11 @@ export function ThanhPhamInventoryPageClient(props: {
   const stickyHeaderStyle = { backgroundColor: '#f6f8fb' }
   const selectedSummaryRow = props.pageData.summaryRows.find((row) => row.itemKey === activeItemKey)
   const activeDisplayDetail = activeDetail?.itemKey === activeItemKey ? activeDetail : null
+  const activeDisplayLabel = activeDisplayDetail
+    ? buildDisplayItemLabel(activeDisplayDetail)
+    : selectedSummaryRow
+      ? buildDisplayItemLabel(selectedSummaryRow)
+      : ''
 
   return (
     <section className="app-surface overflow-hidden rounded-2xl">
@@ -366,7 +391,7 @@ export function ThanhPhamInventoryPageClient(props: {
                         backgroundColor: selected ? 'color-mix(in srgb, var(--color-primary) 4%, white)' : undefined,
                       }}
                     >
-                      <td className="px-4 py-4 font-semibold">{row.itemLabel}</td>
+                      <td className="px-4 py-4 font-semibold">{buildDisplayItemLabel(row)}</td>
                       <td className="px-4 py-4 text-right font-semibold">{row.physicalQty}</td>
                       <td className="px-4 py-4 text-right">{row.projectQty}</td>
                       <td className="px-4 py-4 text-right">{row.retailQty}</td>
@@ -402,7 +427,7 @@ export function ThanhPhamInventoryPageClient(props: {
                   }}
                   onClick={() => handleSelectItem(row.itemKey)}
                 >
-                  <div className="text-base font-semibold leading-snug">{row.itemLabel}</div>
+                  <div className="text-base font-semibold leading-snug">{buildDisplayItemLabel(row)}</div>
                   <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3">
                     <SummaryMetric label="Tồn vật lý" value={row.physicalQty} />
                     <SummaryMetric label="Dự án" value={row.projectQty} />
@@ -466,7 +491,7 @@ export function ThanhPhamInventoryPageClient(props: {
               <div>
                 <h3 className="text-lg font-semibold">Chi tiết serial</h3>
                 <p className="app-muted mt-2 text-sm">
-                  {activeDisplayDetail?.itemLabel || selectedSummaryRow?.itemLabel || 'Đang tải chi tiết...'}
+                  {activeDisplayLabel || 'Đang tải chi tiết...'}
                 </p>
                 {activeDisplayDetail?.legacyShipmentGapQty ? (
                   <div

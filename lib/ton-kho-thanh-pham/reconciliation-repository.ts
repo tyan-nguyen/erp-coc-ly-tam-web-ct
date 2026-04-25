@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  buildStockIdentityKey,
   buildItemKey,
   buildItemLabel,
   buildLocationLabel,
@@ -102,15 +103,21 @@ async function loadAssignedAndReturnedMaps(supabase: AnySupabase, voucherIds: st
   if (relatedSerialIds.length) {
     const { data: serialRows, error: serialError } = await supabase
       .from('pile_serial')
-      .select('serial_id, loai_coc, ten_doan, chieu_dai_m')
+      .select('serial_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m')
       .in('serial_id', relatedSerialIds)
 
     if (serialError) throw serialError
 
     for (const row of safeArray<Record<string, unknown>>(serialRows)) {
+      const loaiCoc = normalizeText(row.loai_coc)
+      const identityKey = buildStockIdentityKey({
+        templateId: normalizeText(row.template_id),
+        maCoc: normalizeText(row.ma_coc),
+        loaiCoc,
+      })
       serialItemKeyMap.set(
         String(row.serial_id || ''),
-        buildItemKey(normalizeText(row.loai_coc), normalizeText(row.ten_doan), round3(toNumber(row.chieu_dai_m)))
+        buildItemKey(loaiCoc, normalizeText(row.ten_doan), round3(toNumber(row.chieu_dai_m)), identityKey)
       )
     }
   }
@@ -152,7 +159,12 @@ function buildCandidateVoucher(
     const loaiCoc = normalizeText(line.loaiCoc)
     const tenDoan = normalizeText(line.tenDoan)
     const chieuDaiM = round3(toNumber(line.chieuDaiM))
-    const itemKey = buildItemKey(loaiCoc, tenDoan, chieuDaiM)
+    const identityKey = buildStockIdentityKey({
+      templateId: normalizeText(line.templateId),
+      maCoc: normalizeText(line.maCoc),
+      loaiCoc,
+    })
+    const itemKey = buildItemKey(loaiCoc, tenDoan, chieuDaiM, identityKey)
     const assignedQty = assignedByVoucherAndItem.get(`${String(row.voucher_id || '')}::${itemKey}`) ?? 0
     const returnedQty = returnedByVoucherAndItem.get(`${String(row.voucher_id || '')}::${itemKey}`) ?? 0
     const unresolvedQty = Math.max(actualQty - assignedQty - returnedQty, 0)
@@ -161,7 +173,7 @@ function buildCandidateVoucher(
     unresolvedLines.push({
       lineId: normalizeText(line.lineId) || itemKey,
       itemKey,
-      itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+      itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, normalizeText(line.maCoc)),
       actualQty,
       assignedQty,
       returnedQty,
@@ -195,7 +207,7 @@ async function loadSerialCandidatesByItemKey(supabase: AnySupabase, itemKeys: st
   const { data: serialRows, error: serialError } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes'
+      'serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes'
     )
     .eq('is_active', true)
 
@@ -234,10 +246,17 @@ async function loadSerialCandidatesByItemKey(supabase: AnySupabase, itemKeys: st
   const result = new Map<string, LegacyReconciliationDetailSerialCandidate[]>()
 
   for (const row of currentRows) {
+    const loaiCoc = normalizeText(row.loai_coc)
+    const identityKey = buildStockIdentityKey({
+      templateId: normalizeText(row.template_id),
+      maCoc: normalizeText(row.ma_coc),
+      loaiCoc,
+    })
     const itemKey = buildItemKey(
-      normalizeText(row.loai_coc),
+      loaiCoc,
       normalizeText(row.ten_doan),
-      round3(toNumber(row.chieu_dai_m))
+      round3(toNumber(row.chieu_dai_m)),
+      identityKey
     )
     if (!itemKeySet.has(itemKey)) continue
 

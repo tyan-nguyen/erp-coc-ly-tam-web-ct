@@ -7,12 +7,14 @@ import {
   isSalesAccountingRole,
   isWarehouseRole,
 } from '@/lib/auth/roles'
+import { writeAuditLog } from '@/lib/audit-log/write'
 import { computeBocTachPreview } from '@/lib/boc-tach/calc'
 import { loadBocTachReferenceData, loadBocTachDetail } from '@/lib/boc-tach/repository'
 import { mapStoredBocTachToPayload } from '@/lib/boc-tach/stored-payload'
 import { loadDonHangList } from '@/lib/don-hang/repository'
 import { deriveCanonicalMaterialCode } from '@/lib/master-data/nvl'
 import { generateLotsAndSerialsFromWarehouseIssue, loadProductionLotsByPlan, type ProductionLotSummary } from '@/lib/pile-serial/repository'
+import { buildStockIdentityKey } from '@/lib/ton-kho-thanh-pham/internal'
 import { loadNetDeliveredTotalsByOrderSegment } from '@/lib/xuat-hang/repository'
 
 type AnySupabase = SupabaseClient
@@ -49,6 +51,8 @@ export type KeHoachLineRow = {
   ma_bao_gia: string | null
   khach_hang: string | null
   du_an: string | null
+  template_id?: string | null
+  ma_coc?: string | null
   loai_coc: string | null
   doan_key: string
   ten_doan: string
@@ -83,6 +87,8 @@ export type AvailableSegmentOption = {
   maBaoGia: string | null
   khachHang: string
   duAn: string
+  templateId?: string | null
+  maCoc?: string | null
   loaiCoc: string
   doanKey: string
   tenDoan: string
@@ -302,6 +308,16 @@ function ensureOperationalActionAllowed(planDate: string, actionLabel: string) {
 function round3(value: number) {
   const rounded = Math.round(Number(value || 0) * 1000) / 1000
   return Number.isFinite(rounded) ? rounded : 0
+}
+
+function summarizeMaterialTotals(materials: Array<{ estimateQty?: number; actualQty?: number }>) {
+  const estimatedQty = round3(materials.reduce((sum, item) => sum + toNumber(item.estimateQty), 0))
+  const actualQty = round3(materials.reduce((sum, item) => sum + toNumber(item.actualQty), 0))
+  return {
+    estimatedQty,
+    actualQty,
+    varianceQty: round3(actualQty - estimatedQty),
+  }
 }
 
 function isMissingRelationError(error: unknown, relationName: string) {
@@ -568,6 +584,8 @@ function buildWarehouseIssueSummary(
 
 function parseOrderSegments(raw: unknown) {
   if (!Array.isArray(raw)) return [] as Array<{
+    templateId?: string | null
+    maCoc?: string | null
     doanKey: string
     tenDoan: string
     chieuDaiM: number
@@ -596,6 +614,8 @@ function parseOrderSegments(raw: unknown) {
         0
 
       return {
+        templateId: normalizeText(row.template_id) || null,
+        maCoc: normalizeText(row.ma_coc) || null,
         doanKey,
         tenDoan,
         chieuDaiM,
@@ -605,8 +625,13 @@ function parseOrderSegments(raw: unknown) {
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
 }
 
-function buildOrderDeliveryKey(orderId: string, loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${normalizeText(orderId)}::${normalizeText(loaiCoc)}::${normalizeText(tenDoan)}::${round3(Number(chieuDaiM || 0))}`
+function buildOrderDeliveryKey(
+  orderId: string,
+  identity: { templateId?: string | null; maCoc?: string | null; loaiCoc: string },
+  tenDoan: string,
+  chieuDaiM: number
+) {
+  return `${normalizeText(orderId)}::${buildStockIdentityKey(identity)}::${normalizeText(tenDoan)}::${round3(Number(chieuDaiM || 0))}`
 }
 
 async function loadPlannedTotalsBySegment(supabase: AnySupabase) {
@@ -732,7 +757,7 @@ async function loadInStockTotalsBySegment(supabase: AnySupabase) {
   const totals = new Map<string, number>()
   const { data, error } = await supabase
     .from('pile_serial')
-    .select('serial_id, loai_coc, ten_doan, chieu_dai_m, lifecycle_status, visible_in_project, visible_in_retail')
+    .select('serial_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, lifecycle_status, visible_in_project, visible_in_retail')
     .eq('is_active', true)
     .eq('lifecycle_status', 'TRONG_KHO')
 
@@ -753,7 +778,11 @@ async function loadInStockTotalsBySegment(supabase: AnySupabase) {
     if (!visibleInProject && !visibleInRetail) continue
 
     const key = [
-      normalizeText(row.loai_coc),
+      buildStockIdentityKey({
+        templateId: normalizeText(row.template_id),
+        maCoc: normalizeText(row.ma_coc),
+        loaiCoc: normalizeText(row.loai_coc),
+      }),
       normalizeText(row.ten_doan),
       String(round3(toNumber(row.chieu_dai_m))),
     ].join('::')
@@ -1522,12 +1551,25 @@ async function buildAvailableSegments(supabase: AnySupabase) {
       const soLuongDaSanXuat = 0
       const soLuongDaQc = latestStageSummary.qcAcceptedTotals.get(key) ?? 0
       const tonKhoKey = [
-        normalizeText(item.order.loai_coc),
+        buildStockIdentityKey({
+          templateId: segment.templateId || null,
+          maCoc: segment.maCoc || null,
+          loaiCoc: item.order.loai_coc,
+        }),
         normalizeText(segment.tenDoan),
         String(round3(Number(segment.chieuDaiM || 0))),
       ].join('::')
       const tonKho = inStockTotals.get(tonKhoKey) ?? 0
-      const deliveredKey = buildOrderDeliveryKey(item.order.order_id, item.order.loai_coc, segment.tenDoan, Number(segment.chieuDaiM || 0))
+      const deliveredKey = buildOrderDeliveryKey(
+        item.order.order_id,
+        {
+          templateId: segment.templateId || null,
+          maCoc: segment.maCoc || null,
+          loaiCoc: item.order.loai_coc,
+        },
+        segment.tenDoan,
+        Number(segment.chieuDaiM || 0)
+      )
       const soLuongDaGiaoRong = netDeliveredTotals.get(deliveredKey) ?? 0
       const soLuongConLaiTam = Math.max(Number(segment.soLuongDat || 0) - soLuongDaGiaoRong, 0)
 
@@ -1547,6 +1589,8 @@ async function buildAvailableSegments(supabase: AnySupabase) {
         maBaoGia: item.linkedQuote.maBaoGia,
         khachHang: item.khachHangName || item.order.kh_id,
         duAn: item.duAnName || item.order.da_id,
+        templateId: segment.templateId || null,
+        maCoc: segment.maCoc || null,
         loaiCoc: item.order.loai_coc,
         doanKey: segment.doanKey,
         tenDoan: segment.tenDoan,
@@ -1816,7 +1860,20 @@ export async function createKeHoachNgay(
     .single()
 
   if (error) throw error
-  return { planId: String(data.plan_id), existed: false }
+  const planId = String(data.plan_id)
+  await writeAuditLog(supabase, {
+    action: 'CREATE',
+    entityType: 'KE_HOACH_SX_NGAY',
+    entityId: planId,
+    entityCode: dateValue,
+    actorId: params.userId,
+    afterJson: { status: 'NHAP' },
+    summaryJson: {
+      ngayKeHoach: dateValue,
+      note: normalizeText(params.note),
+    },
+  })
+  return { planId, existed: false }
 }
 
 export async function loadKeHoachNgayDetail(
@@ -1894,7 +1951,11 @@ export async function loadKeHoachNgayDetail(
     so_luong_con_lai_tam: (() => {
       const deliveredKey = buildOrderDeliveryKey(
         String(row.order_id ?? ''),
-        String(row.loai_coc ?? ''),
+        {
+          templateId: String(row.template_id ?? ''),
+          maCoc: String(row.ma_coc ?? ''),
+          loaiCoc: String(row.loai_coc ?? ''),
+        },
         String(row.ten_doan ?? ''),
         toNumber(row.chieu_dai_m)
       )
@@ -2131,6 +2192,8 @@ export async function addKeHoachLine(
       ma_bao_gia: segment.maBaoGia,
       khach_hang: segment.khachHang,
       du_an: segment.duAn,
+      template_id: segment.templateId || null,
+      ma_coc: segment.maCoc || null,
       loai_coc: segment.loaiCoc,
       doan_key: segment.doanKey,
       ten_doan: segment.tenDoan,
@@ -2148,8 +2211,32 @@ export async function addKeHoachLine(
     .select('*')
     .single()
 
-  if (error) throw error
-  return toRow<KeHoachLineRow>(data as Record<string, unknown>)
+  if (error) {
+    const message = String(error.message || '').toLowerCase()
+    if (message.includes('template_id') || message.includes('ma_coc')) {
+      throw new Error('Thiếu cột identity cho kế hoạch sản xuất. Cần chạy SQL bổ sung template_id/ma_coc trước khi lập kế hoạch mới.')
+    }
+    throw error
+  }
+  const createdLine = toRow<KeHoachLineRow>(data as Record<string, unknown>)
+  await writeAuditLog(supabase, {
+    action: 'CREATE',
+    entityType: 'KE_HOACH_SX_LINE',
+    entityId: String(createdLine.line_id),
+    entityCode: String(createdLine.ma_order || createdLine.loai_coc || createdLine.line_id),
+    actorId: params.userId,
+    summaryJson: {
+      planId: params.planId,
+      orderId: segment.orderId,
+      templateId: segment.templateId || null,
+      maCoc: segment.maCoc || null,
+      loaiCoc: segment.loaiCoc,
+      tenDoan: segment.tenDoan,
+      chieuDaiM: segment.chieuDaiM,
+      soLuongKeHoach,
+    },
+  })
+  return createdLine
 }
 
 export async function deleteKeHoachLine(
@@ -2182,6 +2269,19 @@ export async function deleteKeHoachLine(
 
   if (error) throw error
   if (!data) throw new Error('Không xóa được dòng kế hoạch.')
+  await writeAuditLog(supabase, {
+    action: 'DELETE',
+    entityType: 'KE_HOACH_SX_LINE',
+    entityId: params.lineId,
+    entityCode: params.planId,
+    actorId: params.userId,
+    beforeJson: { isActive: true },
+    afterJson: { isActive: false },
+    summaryJson: {
+      planId: params.planId,
+      lineId: params.lineId,
+    },
+  })
   return { lineId: String(data.line_id) }
 }
 
@@ -2260,6 +2360,20 @@ export async function chotKeHoachNgay(
 
   if (error) throw error
   if (!data) throw new Error('Không chốt được kế hoạch ngày.')
+  await writeAuditLog(supabase, {
+    action: 'CONFIRM',
+    entityType: 'KE_HOACH_SX_NGAY',
+    entityId: params.planId,
+    entityCode: params.planId,
+    actorId: params.userId,
+    beforeJson: { status: 'NHAP' },
+    afterJson: { status: 'DA_CHOT' },
+    summaryJson: {
+      planId: params.planId,
+      lineCount: Number(count || 0),
+      status: 'DA_CHOT',
+    },
+  })
   return { planId: String(data.plan_id), status: 'DA_CHOT' as const }
 }
 
@@ -2298,6 +2412,19 @@ export async function moLaiKeHoachNgay(
 
   if (error) throw error
   if (!data) throw new Error('Không mở chốt được kế hoạch ngày.')
+  await writeAuditLog(supabase, {
+    action: 'REOPEN',
+    entityType: 'KE_HOACH_SX_NGAY',
+    entityId: params.planId,
+    entityCode: params.planId,
+    actorId: params.userId,
+    beforeJson: { status: 'DA_CHOT' },
+    afterJson: { status: 'NHAP' },
+    summaryJson: {
+      planId: params.planId,
+      status: 'NHAP',
+    },
+  })
   return { planId: String(data.plan_id), status: 'NHAP' as const }
 }
 
@@ -2606,7 +2733,7 @@ export async function saveWarehouseIssueVoucher(
     if (lineIds.length) {
       const { data: lineRows, error: lineRowsError } = await supabase
         .from('ke_hoach_sx_line')
-        .select('line_id, order_id, boc_id, quote_id, loai_coc, ten_doan, chieu_dai_m')
+        .select('*')
         .eq('plan_id', params.planId)
         .eq('is_active', true)
         .in('line_id', lineIds)
@@ -2632,6 +2759,8 @@ export async function saveWarehouseIssueVoucher(
               orderId: normalizeText(lineRow.order_id) || null,
               bocId: normalizeText(lineRow.boc_id) || null,
               quoteId: normalizeText(lineRow.quote_id) || null,
+              templateId: normalizeText(lineRow.template_id) || null,
+              maCoc: normalizeText(lineRow.ma_coc) || null,
               loaiCoc: normalizeText(lineRow.loai_coc),
               tenDoan: normalizeText(lineRow.ten_doan),
               chieuDaiM: toNumber(lineRow.chieu_dai_m),
@@ -2652,6 +2781,29 @@ export async function saveWarehouseIssueVoucher(
       schemaReady: false,
     }
   }
+
+  const materialTotals = summarizeMaterialTotals(params.materialSummaries)
+  await writeAuditLog(supabase, {
+    action: 'CONFIRM',
+    entityType: 'SX_XUAT_NVL',
+    entityId: voucherId,
+    entityCode: `KHSX ${params.planId}`,
+    actorId: params.userId,
+    afterJson: { status: 'DA_XAC_NHAN' },
+    summaryJson: {
+      planId: params.planId,
+      operationDate: payloadJson.operationDate,
+      lineCount: params.lineDrafts.length,
+      actualProductionQty: round3(params.lineDrafts.reduce((sum, line) => sum + toNumber(line.actualProductionQty), 0)),
+      materialCount: params.materialSummaries.length,
+      materialEstimatedQty: materialTotals.estimatedQty,
+      materialActualQty: materialTotals.actualQty,
+      materialVarianceQty: materialTotals.varianceQty,
+      stockMovementCreatedCount: stockMovement.createdMovementCount,
+      serialGeneratedCount: serialGeneration.generatedSerialCount,
+    },
+    note: payloadJson.note,
+  })
 
   return {
     voucherId,
@@ -2874,6 +3026,27 @@ export async function saveQcIssueVoucher(
       }
     }
   }
+
+  const qcActualQty = round3(payloadJson.lineResults.reduce((sum, line) => sum + toNumber(line.actualQty), 0))
+  const qcAcceptedQty = round3(payloadJson.lineResults.reduce((sum, line) => sum + toNumber(line.acceptedQty), 0))
+  await writeAuditLog(supabase, {
+    action: 'CONFIRM',
+    entityType: 'SX_QC_NGHIEM_THU',
+    entityId: savedQcIssue.voucherId,
+    entityCode: `KHSX ${params.planId}`,
+    actorId: params.userId,
+    afterJson: { status: 'DA_QC' },
+    summaryJson: {
+      planId: params.planId,
+      operationDate: payloadJson.operationDate,
+      lineCount: payloadJson.lineResults.length,
+      serialCount: payloadJson.serialResults.length,
+      actualQty: qcActualQty,
+      acceptedQty: qcAcceptedQty,
+      rejectedQty: round3(Math.max(qcActualQty - qcAcceptedQty, 0)),
+    },
+    note: payloadJson.note,
+  })
 
   return savedQcIssue
 }

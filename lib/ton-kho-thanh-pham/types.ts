@@ -11,6 +11,8 @@ export type FinishedGoodsInventoryFilters = {
 export type FinishedGoodsInventorySummaryRow = {
   itemKey: string
   itemLabel: string
+  templateId: string
+  maCoc: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -38,6 +40,11 @@ export type FinishedGoodsInventorySerialRow = {
 export type FinishedGoodsInventoryItemDetail = {
   itemKey: string
   itemLabel: string
+  templateId: string
+  maCoc: string
+  loaiCoc: string
+  tenDoan: string
+  chieuDaiM: number
   physicalQty: number
   projectQty: number
   retailQty: number

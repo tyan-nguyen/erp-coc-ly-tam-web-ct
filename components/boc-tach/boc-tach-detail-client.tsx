@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useProtectedSession } from '@/components/auth/protected-session-provider'
-import { fetchBocTachReferenceData, submitBocTachMutation } from '@/lib/boc-tach/client-api'
+import {
+  fetchBocTachReferenceData,
+  submitBocTachMutation,
+  submitReopenBocTach,
+} from '@/lib/boc-tach/client-api'
 import {
   applyPileTemplate,
   computeBocTachPreview,
@@ -54,6 +58,10 @@ function normalizeRefs(refs?: BocTachReferenceData): BocTachReferenceData {
     profitRules: refs?.profitRules ?? [],
     otherCostsByDiameter: refs?.otherCostsByDiameter ?? [],
   }
+}
+
+function formatTemplateDisplayName(template: BocTachReferenceData['pileTemplates'][number]) {
+  return String(template.ma_coc || template.label || '').trim()
 }
 
 function createEmptyPreview(): BocTachPreview {
@@ -125,6 +133,7 @@ export function BocTachDetailClient(props: {
   const [taxPct, setTaxPct] = useState(() => String(initialPayload.header.tax_pct || 0))
   const [profitPctTouched, setProfitPctTouched] = useState(false)
   const [taxPctTouched, setTaxPctTouched] = useState(false)
+  const [manuallyUnlocked, setManuallyUnlocked] = useState(false)
   const [showSegmentIntermediate, setShowSegmentIntermediate] = useState(false)
   const [returnReasonCode, setReturnReasonCode] = useState(
     () => initialPayload.header.qlsx_ly_do_code || ''
@@ -140,8 +149,8 @@ export function BocTachDetailClient(props: {
   const qlsxViewer = isQlsxRole(activeRole)
   const adminViewer = isAdminRole(activeRole)
   const locked =
-    props.initialLocked ||
     (qlsxViewer && payload.header.trang_thai !== 'TRA_LAI') ||
+    (!manuallyUnlocked && props.initialLocked) ||
     (!adminViewer && payload.header.trang_thai === 'DA_DUYET_QLSX')
   const refs = useMemo(() => normalizeRefs(refsState), [refsState])
   const shouldComputePreview = props.bocId !== 'new' || hasStartedInteracting
@@ -233,6 +242,10 @@ export function BocTachDetailClient(props: {
     refs.projects.find((item) => item.da_id === payload.header.da_id) ?? null
   const selectedCustomer =
     refs.customers.find((item) => item.kh_id === payload.header.kh_id) ?? null
+  const factoryPileTemplates = useMemo(
+    () => refs.pileTemplates.filter((item) => item.template_scope !== 'CUSTOM'),
+    [refs.pileTemplates]
+  )
   const selectedAccessoryIds = useMemo(
     () => ({
       mat_bich: resolveAccessorySelectionId(payload.items, refs.materials, 'mat_bich'),
@@ -401,6 +414,14 @@ export function BocTachDetailClient(props: {
     hasPersistedDraft &&
     !hasUnsavedChanges &&
     (payload.header.trang_thai === 'NHAP' || payload.header.trang_thai === 'TRA_LAI')
+  const canSoftReopen =
+    !loading &&
+    !qlsxViewer &&
+    payload.header.trang_thai === 'DA_GUI'
+  const canAdminReopenApproved =
+    !loading &&
+    adminViewer &&
+    payload.header.trang_thai === 'DA_DUYET_QLSX'
 
   const hasChosenTemplate =
     props.bocId !== 'new' ? Boolean(payload.header.loai_coc) : Boolean(selectedTemplateId)
@@ -737,11 +758,38 @@ export function BocTachDetailClient(props: {
 
       if (data.data?.headerId && props.bocId === 'new') {
         router.replace(`/boc-tach/boc-tach-nvl/${data.data.headerId}`)
-      } else {
-        router.refresh()
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không xử lý được')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function reopenEstimate() {
+    if (props.bocId === 'new') return
+
+    setLoading(true)
+    setError('')
+    setMessage('')
+    try {
+      await submitReopenBocTach({ bocId: props.bocId })
+      setPayload((current) => ({
+        ...current,
+        header: {
+          ...current.header,
+          trang_thai: 'NHAP',
+          qlsx_ly_do_code: '',
+          qlsx_ly_do_text: '',
+        },
+      }))
+      setReturnReasonCode('')
+      setReturnReasonText('')
+      setManuallyUnlocked(true)
+      setMessage('Đã mở lại bóc tách. Có thể chỉnh sửa và gửi lại khi sẵn sàng.')
+      router.refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Không mở lại được bóc tách.')
     } finally {
       setLoading(false)
     }
@@ -962,17 +1010,19 @@ export function BocTachDetailClient(props: {
 
         <div className="mt-8">
           <SearchSelectField
-            label="Loại cọc"
+            label="Mã cọc"
             value={selectedTemplateId}
             disabled={locked}
-            options={refs.pileTemplates.map((template) => ({
-              value: template.template_id,
-              label: template.loai_coc || template.label || template.template_id,
-            }))}
+            options={factoryPileTemplates
+              .map((template) => ({
+                value: template.template_id,
+                label: formatTemplateDisplayName(template),
+              }))
+              .filter((option) => Boolean(option.label))}
             onChange={(value) => {
               markInteracted()
               setSelectedTemplateId(value)
-              const template = refs.pileTemplates.find((item) => item.template_id === value)
+              const template = factoryPileTemplates.find((item) => item.template_id === value)
               if (!template) return
               const nextPayload = applyPileTemplate(payload, template, refs)
               const nextDtam =
@@ -993,10 +1043,10 @@ export function BocTachDetailClient(props: {
               })
               setPileCount(derivePileCount(nextPayload.segments))
               setAutoDtam(true)
-              setMessage(`Đã nạp bộ thông số mặc định: ${template.loai_coc || template.label || template.template_id}`)
+              setMessage(`Đã nạp bộ thông số mặc định: ${formatTemplateDisplayName(template)}`)
               setError('')
             }}
-            placeholder="-- chọn loại cọc --"
+            placeholder="-- chọn mã cọc --"
           />
         </div>
 
@@ -1481,6 +1531,16 @@ export function BocTachDetailClient(props: {
         <div className="flex flex-wrap items-center gap-3">
           {!qlsxViewer ? (
             <>
+              {canSoftReopen || canAdminReopenApproved ? (
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void reopenEstimate()}
+                  className="app-outline rounded-xl px-4 py-2 text-sm font-semibold transition disabled:opacity-40"
+                >
+                  {canAdminReopenApproved ? 'Admin mở lại bóc tách' : 'Mở lại bóc tách'}
+                </button>
+              ) : null}
               <button
                 type="button"
                 disabled={!canSaveDraft}

@@ -1,12 +1,14 @@
 import { createClient } from '@/lib/supabase/server'
 
 type RowData = Record<string, unknown>
+const BOC_META_PREFIX = 'ERP_BOC_META::'
 
 export type BocTachListRow = {
   id: string
   displayId: string
   daId: string
   khId: string
+  maCoc: string
   duAn: string
   khachHang: string
   loaiCoc: string
@@ -28,7 +30,12 @@ export async function loadBocTachListPageData(input: {
   qlsxViewer: boolean
 }) {
   const supabase = await createClient()
-  const [{ data: headerRows, error }, { data: projectRows }, { data: customerRows }, quoteStatusByBocId] = await Promise.all([
+  const [
+    { data: headerRows, error },
+    { data: projectRows },
+    { data: customerRows },
+    quoteStatusByBocId,
+  ] = await Promise.all([
     loadBocTachHeadersForList(supabase),
     supabase.from('dm_duan').select('da_id, ma_da, ten_da').limit(500),
     supabase.from('dm_kh').select('kh_id, ma_kh, ten_kh').limit(500),
@@ -54,21 +61,26 @@ export async function loadBocTachListPageData(input: {
       },
     ])
   )
-
-  const listRows = rows
-    .map((row) => {
+  const rawListRows: Array<BocTachListRow & { _projectCode: string }> = rows.map((row) => {
       const id = resolveHeaderId(row)
       const project = projectMap.get(String(row.da_id ?? ''))
       const customer = customerMap.get(String(row.kh_id ?? ''))
+      const projectCode = project?.ma_da || project?.ten_da || 'BT'
+      const bocMeta = parseBocMeta(row)
+      const firstSegment = readFirstSegment(row)
+      const maCoc =
+        String(row.ma_coc ?? bocMeta.ma_coc ?? firstSegment?.ma_coc ?? '').trim() || 'Chưa có mã cọc'
       const loaiCoc = String(row.loai_coc ?? '').trim() || 'Chưa có loại cọc'
       const totalMd = deriveTotalMd(row)
       const status = String(row.trang_thai ?? 'NHAP')
+      const createdAt = String(row.created_at ?? row.gui_qlsx_at ?? row.updated_at ?? '')
 
       return {
         id,
-        displayId: buildDisplayId(id, project?.ma_da || project?.ten_da || '', loaiCoc),
+        displayId: '',
         daId: String(row.da_id ?? ''),
         khId: String(row.kh_id ?? ''),
+        maCoc,
         duAn: [project?.ma_da, project?.ten_da].filter(Boolean).join(' - ') || 'Chưa có dự án',
         khachHang: [customer?.ma_kh, customer?.ten_kh].filter(Boolean).join(' - ') || 'Chưa có khách hàng',
         loaiCoc,
@@ -77,17 +89,26 @@ export async function loadBocTachListPageData(input: {
         trangThai: status,
         trangThaiLabel: formatStatusLabel(status),
         canDelete: status === 'NHAP' || status === 'TRA_LAI',
-        createdAt: String(row.created_at ?? row.gui_qlsx_at ?? row.updated_at ?? ''),
+        createdAt,
         linkedQuoteStatus: quoteStatusByBocId.get(id) ?? null,
-      } satisfies BocTachListRow
+        _projectCode: projectCode,
+      }
     })
+
+  const listRows = rawListRows
     .filter((row) =>
       input.qlsxViewer ? row.trangThai === 'DA_GUI' || row.trangThai === 'DA_DUYET_QLSX' : true
     )
     .sort((left, right) => compareRowsDesc(left.createdAt, right.createdAt, left.id, right.id))
 
+  const sequenceMap = buildDisplaySequenceMap(listRows)
+  const finalRows = listRows.map(({ _projectCode, ...row }) => ({
+    ...row,
+    displayId: buildDisplayId(_projectCode, row.maCoc, sequenceMap.get(row.id) ?? 1),
+  }))
+
   return {
-    rows: listRows,
+    rows: finalRows,
     error: error ? { message: error.message } : null,
   } satisfies BocTachListPageData
 }
@@ -128,7 +149,7 @@ async function loadQuoteStatusByBocId(supabase: Awaited<ReturnType<typeof create
 
 async function loadBocTachHeadersForList(supabase: Awaited<ReturnType<typeof createClient>>) {
   const optimizedSelect =
-    'boc_id,boc_tach_id,id,da_id,kh_id,loai_coc,to_hop_doan,trang_thai,phuong_thuc_van_chuyen,created_at,updated_at,gui_qlsx_at'
+    'boc_id,boc_tach_id,id,da_id,kh_id,ma_coc,loai_coc,mac_be_tong,do_ngoai,chieu_day,to_hop_doan,ghi_chu,trang_thai,phuong_thuc_van_chuyen,created_at,updated_at,gui_qlsx_at'
 
   const optimizedAttempt = await supabase
     .from('boc_tach_nvl')
@@ -157,6 +178,22 @@ function resolveHeaderId(row: RowData) {
   return String(row.boc_id ?? row.boc_tach_id ?? row.id ?? '')
 }
 
+function parseBocMeta(row: RowData) {
+  const raw = String(row.ghi_chu ?? '').trim()
+  if (!raw.startsWith(BOC_META_PREFIX)) return {} as Record<string, unknown>
+  try {
+    return JSON.parse(raw.slice(BOC_META_PREFIX.length)) as Record<string, unknown>
+  } catch {
+    return {} as Record<string, unknown>
+  }
+}
+
+function readFirstSegment(row: RowData) {
+  const segments = Array.isArray(row.to_hop_doan) ? row.to_hop_doan : []
+  const first = segments.find((segment) => segment && typeof segment === 'object')
+  return (first as RowData | undefined) ?? null
+}
+
 function deriveTotalMd(row: RowData) {
   const segments = Array.isArray(row.to_hop_doan) ? row.to_hop_doan : []
   return segments.reduce((acc, segment) => {
@@ -169,10 +206,26 @@ function deriveTotalMd(row: RowData) {
   }, 0)
 }
 
-function buildDisplayId(id: string, projectCode: string, loaiCoc: string) {
-  const shortId = id.slice(-6).toUpperCase()
+function buildDisplaySequenceMap(rows: Array<BocTachListRow & { _projectCode: string }>) {
+  const sorted = [...rows].sort((left, right) => compareRowsAsc(left.createdAt, right.createdAt, left.id, right.id))
+  const counters = new Map<string, number>()
+  const result = new Map<string, number>()
+
+  for (const row of sorted) {
+    const key = `${row._projectCode}__${row.maCoc}`
+    const next = (counters.get(key) ?? 0) + 1
+    counters.set(key, next)
+    result.set(row.id, next)
+  }
+
+  return result
+}
+
+function buildDisplayId(projectCode: string, maCoc: string, sequence: number) {
   const projectPart = projectCode || 'BT'
-  return `${projectPart} · ${loaiCoc} · ${shortId}`
+  const maCocPart = maCoc || 'Chưa có mã cọc'
+  const sequencePart = String(sequence).padStart(2, '0')
+  return `${projectPart} · ${maCocPart} · ${sequencePart}`
 }
 
 function formatStatusLabel(status: string) {
@@ -196,4 +249,11 @@ function compareRowsDesc(leftDate: string, rightDate: string, leftId: string, ri
   const rightTime = rightDate ? new Date(rightDate).getTime() : 0
   if (leftTime !== rightTime) return rightTime - leftTime
   return rightId.localeCompare(leftId)
+}
+
+function compareRowsAsc(leftDate: string, rightDate: string, leftId: string, rightId: string) {
+  const leftTime = leftDate ? new Date(leftDate).getTime() : 0
+  const rightTime = rightDate ? new Date(rightDate).getTime() : 0
+  if (leftTime !== rightTime) return leftTime - rightTime
+  return leftId.localeCompare(rightId)
 }

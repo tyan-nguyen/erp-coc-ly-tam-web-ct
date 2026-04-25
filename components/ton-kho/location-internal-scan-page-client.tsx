@@ -626,7 +626,7 @@ export function WarehouseLocationInternalScanPageClient(props: {
           <div className="mb-4">
             <div className="text-lg font-semibold">Tìm serial từ thông tin tem</div>
             <div className="mt-1 text-sm text-[var(--color-muted)]">
-              Dùng khi QR bị xước và không đọc được serial, nhưng vẫn còn thông tin mã cọc, đoạn, ngày và STT.
+              Dùng khi QR bị xước và không đọc được serial, nhưng vẫn còn thông tin mã cọc, đoạn, chiều dài và STT.
             </div>
           </div>
           <SerialReprintSearchPanel

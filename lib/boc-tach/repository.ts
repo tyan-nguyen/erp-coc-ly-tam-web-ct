@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { isAdminRole, isCommercialRole, isQlsxRole } from '@/lib/auth/roles'
 import { computeBocTachPreview, sanitizeItems, sanitizeSegments } from '@/lib/boc-tach/calc'
 import type {
   AuxiliaryMaterialReference,
@@ -20,7 +21,7 @@ const BOC_META_PREFIX = 'ERP_BOC_META::'
 const ADDRESS_NOTE_PREFIX = '[VI_TRI_CONG_TRINH]:'
 const AREA_NOTE_PREFIX = '[KHU_VUC]:'
 const TEMPLATE_CANDIDATE_COLUMNS = {
-  code: ['ma_coc_template', 'ma_coc'],
+  code: ['ma_coc', 'ma_coc_template'],
   steelGrade: ['mac_thep'],
   cuongDo: ['cuong_do'],
   pcNvlId: ['pc_nvl_id', 'thep_pc_nvl_id'],
@@ -62,9 +63,10 @@ function readStringCandidate(
 
 function parseTemplateMeta(row: Record<string, unknown>) {
   const raw = String(row.ghi_chu || '').trim()
-  if (!raw.startsWith(TEMPLATE_META_PREFIX)) return {} as Record<string, unknown>
+  const markerIndex = raw.indexOf(TEMPLATE_META_PREFIX)
+  if (markerIndex < 0) return {} as Record<string, unknown>
   try {
-    return JSON.parse(raw.slice(TEMPLATE_META_PREFIX.length)) as Record<string, unknown>
+    return JSON.parse(raw.slice(markerIndex + TEMPLATE_META_PREFIX.length)) as Record<string, unknown>
   } catch {
     return {} as Record<string, unknown>
   }
@@ -224,6 +226,102 @@ function normalizeTemplateText(value: string | null | undefined): string {
     .toUpperCase()
 }
 
+function normalizeSignatureNumber(value: unknown) {
+  const numeric = Number(value ?? 0)
+  return Number.isFinite(numeric) ? String(numeric) : '0'
+}
+
+function normalizeSignatureRef(idValue: unknown, labelValue: unknown) {
+  const id = String(idValue ?? '').trim()
+  if (id) return `ID:${id}`
+  const label = normalizeTemplateText(String(labelValue ?? ''))
+  return label ? `LABEL:${label}` : ''
+}
+
+function buildExistingTemplateSignature(merged: Record<string, unknown>) {
+  return [
+    normalizeTemplateText(String(merged.loai_coc ?? '')),
+    normalizeSignatureNumber(merged.mac_be_tong),
+    normalizeSignatureNumber(merged.do_ngoai),
+    normalizeSignatureNumber(merged.chieu_day),
+    normalizeSignatureNumber(merged.pc_dia_mm),
+    normalizeSignatureNumber(merged.pc_nos),
+    normalizeSignatureNumber(merged.dai_dia_mm),
+    normalizeSignatureNumber(merged.buoc_dia_mm),
+    normalizeSignatureNumber(merged.dtam_mm),
+    normalizeSignatureNumber(merged.a1_mm),
+    normalizeSignatureNumber(merged.a2_mm),
+    normalizeSignatureNumber(merged.a3_mm),
+    normalizeSignatureNumber(merged.p1_pct),
+    normalizeSignatureNumber(merged.p2_pct),
+    normalizeSignatureNumber(merged.p3_pct),
+    normalizeSignatureNumber(merged.don_kep_factor),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.pcNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.pcLabel)
+    ),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.daiNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.daiLabel)
+    ),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.buocNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.buocLabel)
+    ),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.matBichNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.matBichLabel)
+    ),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.mangXongNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.mangXongLabel)
+    ),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.tapNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.tapLabel)
+    ),
+    normalizeSignatureRef(
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.muiCocNvlId),
+      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.muiCocLabel)
+    ),
+  ].join('__')
+}
+
+function buildDraftTemplateSignature(
+  payload: BocTachDetailPayload,
+  rowMeta: Record<string, unknown>,
+  loaiCoc: string,
+  macBeTong: string,
+  doNgoai: number,
+  chieuDay: number
+) {
+  return [
+    normalizeTemplateText(loaiCoc),
+    normalizeSignatureNumber(macBeTong),
+    normalizeSignatureNumber(doNgoai),
+    normalizeSignatureNumber(chieuDay),
+    normalizeSignatureNumber(payload.header.pc_dia_mm),
+    normalizeSignatureNumber(rowMeta.pc_nos),
+    normalizeSignatureNumber(payload.header.dai_dia_mm),
+    normalizeSignatureNumber(payload.header.buoc_dia_mm),
+    normalizeSignatureNumber(rowMeta.dtam_mm),
+    normalizeSignatureNumber(rowMeta.a1_mm),
+    normalizeSignatureNumber(rowMeta.a2_mm),
+    normalizeSignatureNumber(rowMeta.a3_mm),
+    normalizeSignatureNumber(rowMeta.p1_pct),
+    normalizeSignatureNumber(rowMeta.p2_pct),
+    normalizeSignatureNumber(rowMeta.p3_pct),
+    normalizeSignatureNumber(rowMeta.don_kep_factor),
+    normalizeSignatureRef(rowMeta.pc_nvl_id, rowMeta.pc_label),
+    normalizeSignatureRef(rowMeta.dai_nvl_id, rowMeta.dai_label),
+    normalizeSignatureRef(rowMeta.buoc_nvl_id, rowMeta.buoc_label),
+    normalizeSignatureRef(rowMeta.mat_bich_nvl_id, rowMeta.mat_bich_label),
+    normalizeSignatureRef(rowMeta.mang_xong_nvl_id, rowMeta.mang_xong_label),
+    normalizeSignatureRef(rowMeta.tap_nvl_id, rowMeta.tap_label),
+    normalizeSignatureRef(rowMeta.mui_coc_nvl_id, rowMeta.mui_coc_label),
+  ].join('__')
+}
+
 function accessoryKindFromName(value: string | null | undefined) {
   const normalized = normalizeTemplateText(value)
   if (normalized.includes('MAT BICH')) return 'mat_bich'
@@ -259,6 +357,30 @@ function extractSteelGradeFromPileType(value: string | null | undefined) {
   return match?.[1] ?? ''
 }
 
+function extractTemplateSteelGrade(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const explicit = normalizeTemplateText(row.mac_thep || meta.mac_thep)
+  const direct = explicit.match(/^([ABC])/)
+  if (direct?.[1]) return direct[1]
+  return extractSteelGradeFromPileType(String(row.loai_coc || meta.loai_coc || ''))
+}
+
+function extractTemplateDiameter(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const explicit = normalizeTemplateText(row.do_ngoai || meta.do_ngoai)
+  if (explicit) return explicit
+  const match = normalizeTemplateText(row.loai_coc || meta.loai_coc).match(/[ABC](\d+)/)
+  return match?.[1] || ''
+}
+
+function extractTemplateThickness(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const explicit = normalizeTemplateText(row.chieu_day || meta.chieu_day)
+  if (explicit) return explicit
+  const match = normalizeTemplateText(row.loai_coc || meta.loai_coc).match(/-\s*[ABC]\d+\s*-\s*(\d+(?:\.\d+)?)/)
+  return match?.[1] || ''
+}
+
 function extractCuongDoFromPileType(value: string | null | undefined) {
   const normalized = normalizeTemplateText(value)
   if (normalized.startsWith('PHC')) return 'PHC'
@@ -270,8 +392,63 @@ function buildLoaiCoc(cuongDo: string, steelGrade: string, doNgoai: number, chie
   return `${cuongDo} - ${steelGrade}${doNgoai} - ${chieuDay}`
 }
 
-function buildCodePrefix(macBeTong: string, steelGrade: string, doNgoai: number) {
-  return `M${macBeTong} - ${steelGrade}${doNgoai}`
+function buildCodePrefix(macBeTong: string, steelGrade: string, doNgoai: number, chieuDay: number) {
+  return `M${macBeTong} - ${steelGrade}${doNgoai} - ${chieuDay}`
+}
+
+function isCanonicalTemplateCode(value: string | null | undefined) {
+  const normalized = String(value || '').trim().toUpperCase()
+  return /^M\d+(?:\.\d+)?\s*-\s*[ABC]\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?(?:\s*-\s*\d+)?$/.test(normalized)
+}
+
+function resolveTemplateDisplayCode(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  for (const field of ['ma_coc', 'ma_coc_template', 'ma_template']) {
+    const value = readTemplateStringCandidate(row, meta, [field])
+    if (isCanonicalTemplateCode(value)) return value
+  }
+  const macBeTong = normalizeTemplateText(row.mac_be_tong || meta.mac_be_tong).replace(/^M/, '')
+  const steelGrade = extractTemplateSteelGrade(row)
+  const diameter = extractTemplateDiameter(row)
+  const thickness = extractTemplateThickness(row)
+  if (!macBeTong || !steelGrade || !diameter || !thickness) return '-'
+  return `M${macBeTong} - ${steelGrade}${diameter} - ${thickness}`
+}
+
+function buildTemplateCodeMap(rows: Array<Record<string, unknown>>) {
+  const sorted = [...rows].sort((a, b) => {
+    const aTime = new Date(String(a.created_at ?? a.updated_at ?? '')).getTime() || 0
+    const bTime = new Date(String(b.created_at ?? b.updated_at ?? '')).getTime() || 0
+    if (aTime !== bTime) return aTime - bTime
+    return normalizeText(a.template_id || a.id).localeCompare(normalizeText(b.template_id || b.id), 'vi')
+  })
+
+  const prefixCount = new Map<string, number>()
+  const codeByTemplateId = new Map<string, string>()
+
+  for (const row of sorted) {
+    const templateId = readStringCandidate(row, ['template_id', 'id'])
+    if (!templateId) continue
+
+    const explicitCode = resolveTemplateDisplayCode(row)
+    const macBeTong = normalizeTemplateText(row.mac_be_tong || parseTemplateMeta(row).mac_be_tong).replace(/^M/, '')
+    const steelGrade = extractTemplateSteelGrade(row)
+    const diameter = extractTemplateDiameter(row)
+    const thickness = extractTemplateThickness(row)
+    const prefix =
+      macBeTong && steelGrade && diameter && thickness ? `M${macBeTong} - ${steelGrade}${diameter} - ${thickness}` : ''
+
+    if (!prefix) {
+      codeByTemplateId.set(templateId, explicitCode)
+      continue
+    }
+
+    const next = (prefixCount.get(prefix) ?? 0) + 1
+    prefixCount.set(prefix, next)
+    codeByTemplateId.set(templateId, explicitCode.startsWith(`${prefix} - `) ? explicitCode : `${prefix} - ${next}`)
+  }
+
+  return codeByTemplateId
 }
 
 function parseMaterialDiameter(value: string | null | undefined) {
@@ -537,31 +714,19 @@ async function ensureTemplateForSend(
       __meta: parseTemplateMeta(row),
     })
   )
+  const draftSignature = buildDraftTemplateSignature(
+    payload,
+    rowMeta,
+    loaiCoc,
+    macBeTong,
+    doNgoai,
+    chieuDay
+  )
 
   const duplicate = rows.find((row) => {
     const meta = (row.__meta as Record<string, unknown>) || {}
     const merged = { ...meta, ...row }
-    return (
-      String(merged.loai_coc ?? '').trim() === loaiCoc &&
-      String(merged.mac_be_tong ?? '').trim() === macBeTong &&
-      Number(merged.do_ngoai ?? 0) === doNgoai &&
-      Number(merged.chieu_day ?? 0) === chieuDay &&
-      Number(merged.pc_nos ?? 0) === Number(rowMeta.pc_nos) &&
-      Number(merged.a1_mm ?? 0) === Number(rowMeta.a1_mm) &&
-      Number(merged.a2_mm ?? 0) === Number(rowMeta.a2_mm) &&
-      Number(merged.a3_mm ?? 0) === Number(rowMeta.a3_mm) &&
-      Number(merged.p1_pct ?? 0) === Number(rowMeta.p1_pct) &&
-      Number(merged.p2_pct ?? 0) === Number(rowMeta.p2_pct) &&
-      Number(merged.p3_pct ?? 0) === Number(rowMeta.p3_pct) &&
-      Number(merged.don_kep_factor ?? 0) === Number(rowMeta.don_kep_factor) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.pcNvlId) === String(rowMeta.pc_nvl_id) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.daiNvlId) === String(rowMeta.dai_nvl_id) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.buocNvlId) === String(rowMeta.buoc_nvl_id) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.matBichNvlId) === String(rowMeta.mat_bich_nvl_id) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.mangXongNvlId) === String(rowMeta.mang_xong_nvl_id) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.tapNvlId) === String(rowMeta.tap_nvl_id) &&
-      readCandidateValue(merged, TEMPLATE_CANDIDATE_COLUMNS.muiCocNvlId) === String(rowMeta.mui_coc_nvl_id)
-    )
+    return buildExistingTemplateSignature(merged) === draftSignature
   }) ?? null
 
   if (duplicate) {
@@ -573,16 +738,7 @@ async function ensureTemplateForSend(
     }
   }
 
-  const sameUniqueKeyRow =
-    rows.find((row) => {
-      const meta = (row.__meta as Record<string, unknown>) || {}
-      const merged = { ...meta, ...row }
-      return (
-        String(merged.loai_coc ?? '').trim() === loaiCoc &&
-        Number(merged.do_ngoai ?? 0) === doNgoai &&
-        Number(merged.chieu_day ?? 0) === chieuDay
-      )
-    }) ?? null
+  const sameUniqueKeyRow = null as (Record<string, unknown> & { __meta: Record<string, unknown> }) | null
 
   const siblingCount = rows.filter((row) => {
     const meta = (row.__meta as Record<string, unknown>) || {}
@@ -590,11 +746,12 @@ async function ensureTemplateForSend(
     return (
       String(merged.mac_be_tong ?? '').trim() === macBeTong &&
       Number(merged.do_ngoai ?? 0) === doNgoai &&
+      Number(merged.chieu_day ?? 0) === chieuDay &&
       String(merged.mac_thep ?? '').trim().toUpperCase() === steelGrade
     )
   }).length
 
-  const maCoc = `${buildCodePrefix(macBeTong, steelGrade, doNgoai)} - ${siblingCount + 1}`
+  const maCoc = `${buildCodePrefix(macBeTong, steelGrade, doNgoai, chieuDay)} - ${siblingCount + 1}`
   const insertPayload: Record<string, unknown> = {
     loai_coc: loaiCoc,
     cuong_do: cuongDo,
@@ -689,16 +846,8 @@ async function ensureTemplateForSend(
 }
 
 function buildTemplateLabel(row: Record<string, unknown>): string {
-  const meta = parseTemplateMeta(row)
-  const code = readTemplateStringCandidate(row, meta, ['ma_coc_template', 'ma_template'])
-  const loaiCoc = readTemplateStringCandidate(row, meta, ['loai_coc'])
-  const doNgoai = readTemplateNumberCandidate(row, meta, ['do_ngoai', 'do_mm'])
-  const chieuDay = readTemplateNumberCandidate(row, meta, ['chieu_day', 't_mm'])
-  const mac = readTemplateStringCandidate(row, meta, ['mac_be_tong'])
-
-  const parts = [code, loaiCoc, doNgoai ? `D${doNgoai}` : '', chieuDay ? `T${chieuDay}` : '', mac]
-    .filter(Boolean)
-  return parts.join(' - ')
+  const resolved = resolveTemplateDisplayCode(row)
+  return resolved === '-' ? '' : resolved
 }
 
 function parseConcreteMixVariant(row: Record<string, unknown>): string {
@@ -761,6 +910,7 @@ export async function loadBocTachReferenceData(
   const concreteMixRows = (mixRows ?? []) as Array<Record<string, unknown>>
   const auxiliaryRateRows = (auxRows ?? []) as Array<Record<string, unknown>>
   const pileTemplateRows = (templateRows ?? []) as Array<Record<string, unknown>>
+  const templateCodeMap = buildTemplateCodeMap(pileTemplateRows)
   const projectRefRows = (projectRows ?? []) as Array<Record<string, unknown>>
   const customerRefRows = (customerRows ?? []) as Array<Record<string, unknown>>
   const materialRefRows = (materialRows ?? []) as Array<Record<string, unknown>>
@@ -796,7 +946,7 @@ export async function loadBocTachReferenceData(
     )
   )
 
-  let nvlNameMap = new Map(
+  const nvlNameMap = new Map(
     materialRefRows.map((row) => [
       readStringCandidate(row, ['nvl_id', 'id']),
       readStringCandidate(row, ['ten_hang'], readStringCandidate(row, ['nvl_id', 'id'])),
@@ -859,12 +1009,16 @@ export async function loadBocTachReferenceData(
         dvt: String(row.dvt || ''),
       })
     ),
-    pileTemplates: pileTemplateRows.map(
-      (row): PileTemplateReference => {
+    pileTemplates: pileTemplateRows
+      .map((row): PileTemplateReference | null => {
         const meta = parseTemplateMeta(row)
+        const templateId = readStringCandidate(row, ['template_id', 'id'])
+        const maCoc = templateCodeMap.get(templateId) || undefined
+        if (!maCoc || maCoc === '-') return null
         return {
-          template_id: readStringCandidate(row, ['template_id', 'id']),
-          label: buildTemplateLabel(row),
+          template_id: templateId,
+          ma_coc: maCoc,
+          label: maCoc || buildTemplateLabel(row),
           template_scope: resolveTemplateScope(row, meta),
           loai_coc: readTemplateStringCandidate(row, meta, ['loai_coc']) || undefined,
           mac_be_tong:
@@ -922,8 +1076,8 @@ export async function loadBocTachReferenceData(
           mui_coc_label:
             readTemplateStringCandidate(row, meta, ['mui_coc', 'mui_coc_label']) || undefined,
         }
-      }
-    ).filter((row) => row.template_scope !== 'CUSTOM'),
+      })
+      .filter((row): row is PileTemplateReference => row !== null),
     customers: customerRefRows.map(
       (row): CustomerReference => ({
         kh_id: readStringCandidate(row, ['kh_id', 'id']),
@@ -1094,6 +1248,102 @@ export async function loadBocTachDetail(supabase: AnySupabase, bocId: string) {
     segments: (segments ?? []) as Record<string, unknown>[],
     itemParentField,
     segParentField,
+  }
+}
+
+async function hasBocTachDownstreamRecords(supabase: AnySupabase, bocId: string) {
+  const [
+    { count: orderCount, error: orderError },
+    { count: planCount, error: planError },
+  ] = await Promise.all([
+    supabase
+      .from('don_hang')
+      .select('order_id', { count: 'exact', head: true })
+      .eq('boc_id', bocId)
+      .eq('is_active', true),
+    supabase
+      .from('ke_hoach_sx_line')
+      .select('line_id', { count: 'exact', head: true })
+      .eq('boc_id', bocId)
+      .eq('is_active', true),
+  ])
+
+  if (orderError) throw orderError
+  if (planError) throw planError
+
+  return {
+    hasLinkedOrder: Number(orderCount || 0) > 0,
+    hasProductionPlan: Number(planCount || 0) > 0,
+  }
+}
+
+export async function reopenBocTach(
+  supabase: AnySupabase,
+  params: {
+    bocId: string
+    userId: string
+    userRole: string
+  }
+) {
+  const existing = await findHeaderById(supabase, params.bocId)
+  if (!existing.row) {
+    throw new Error('Không tìm thấy hồ sơ bóc tách để mở lại.')
+  }
+
+  const currentStatus = String(existing.row.trang_thai || 'NHAP') as HeaderStatus
+  const isAdmin = isAdminRole(params.userRole)
+  const isQlsx = isQlsxRole(params.userRole)
+  const isCommercial = isCommercialRole(params.userRole)
+
+  if (isQlsx || (!isAdmin && !isCommercial)) {
+    throw new Error('Chỉ KTBH hoặc Admin mới được mở lại bóc tách.')
+  }
+
+  if (currentStatus === 'DA_GUI') {
+    // soft reopen is allowed for upstream side when QLSX has not processed it yet
+  } else if (currentStatus === 'DA_DUYET_QLSX') {
+    if (!isAdmin) {
+      throw new Error('Chỉ Admin mới được mở lại bóc tách đã duyệt QLSX.')
+    }
+  } else {
+    throw new Error('Chỉ mở lại được bóc tách đang chờ QLSX hoặc đã duyệt QLSX.')
+  }
+
+  const downstream = await hasBocTachDownstreamRecords(supabase, params.bocId)
+  if (downstream.hasProductionPlan) {
+    throw new Error('Bóc tách đã được đưa vào kế hoạch sản xuất. Cần mở ngược kế hoạch trước.')
+  }
+  if (downstream.hasLinkedOrder) {
+    throw new Error('Bóc tách đã sinh đơn hàng. Cần mở ngược đơn hàng trước.')
+  }
+
+  const currentMeta = parseBocMeta(existing.row)
+  const nextMeta = {
+    ...currentMeta,
+    qlsx_reason_code: '',
+    qlsx_reason_text: '',
+    qlsx_tra_lai_at: '',
+    qlsx_duyet_at: '',
+  }
+
+  const { data, error } = await executeHeaderUpdateWithFallback(
+    supabase,
+    existing.idField,
+    params.bocId,
+    {
+      trang_thai: 'NHAP',
+      ghi_chu: buildStoredBocNote(
+        readStringCandidate(existing.row, ['ten_boc_tach'], ''),
+        nextMeta
+      ),
+      updated_by: params.userId,
+    }
+  )
+  if (error) throw new Error(toErrorMessage(error))
+
+  return {
+    header: (data ?? existing.row) as Record<string, unknown>,
+    reopenedFrom: currentStatus,
   }
 }
 
@@ -1305,13 +1555,24 @@ export async function saveBocTach(
             : 'NHAP'
 
   const ensuredTemplate =
-    action === 'send'
+    action === 'save'
       ? await ensureTemplateForSend(supabase, userId, cleanedPayload, refs.materials)
       : null
 
   const existingMeta = existing.row ? parseBocMeta(existing.row) : {}
+  const resolvedMaCoc =
+    ensuredTemplate?.ma_coc ||
+    cleanedPayload.header.ma_coc ||
+    String(existing.row?.ma_coc || existingMeta.ma_coc || '')
+  const existingSegments = Array.isArray(existing.row?.to_hop_doan)
+    ? (existing.row?.to_hop_doan as Array<Record<string, unknown>>)
+    : []
+  const resolvedTemplateId =
+    ensuredTemplate?.template_id ||
+    String(cleanedPayload.segments[0]?.template_id || existingSegments[0]?.template_id || '')
   const nextMeta = {
     ...existingMeta,
+    ma_coc: resolvedMaCoc,
     profit_pct: Number(cleanedPayload.header.profit_pct || existingMeta.profit_pct || 0),
     tax_pct: Number(cleanedPayload.header.tax_pct || existingMeta.tax_pct || 0),
     qlsx_reason_code: String(cleanedPayload.header.qlsx_ly_do_code || existingMeta.qlsx_reason_code || ''),
@@ -1329,6 +1590,7 @@ export async function saveBocTach(
   const headerPayload: Record<string, unknown> = {
     da_id: cleanedPayload.header.da_id,
     kh_id: cleanedPayload.header.kh_id,
+    ma_coc: resolvedMaCoc || null,
     loai_coc: ensuredTemplate?.loai_coc || cleanedPayload.header.loai_coc,
     do_ngoai: cleanedPayload.header.do_ngoai,
     chieu_day: cleanedPayload.header.chieu_day,
@@ -1339,6 +1601,8 @@ export async function saveBocTach(
     trang_thai: nextStatus,
     to_hop_doan: cleanedPayload.segments.map((segment) => ({
       ...segment,
+      template_id: resolvedTemplateId || segment.template_id || '',
+      ma_coc: resolvedMaCoc,
       cap_phoi_variant: cleanedPayload.header.cap_phoi_variant,
       kg_md: cleanedPayload.header.kg_md,
       loai_thep: cleanedPayload.header.loai_thep,

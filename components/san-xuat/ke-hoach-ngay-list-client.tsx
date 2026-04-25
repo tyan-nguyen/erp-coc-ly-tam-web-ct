@@ -21,6 +21,7 @@ type DraftPlanLine = {
   maOrder: string
   khachHang: string
   duAn: string
+  maCoc: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -382,6 +383,7 @@ export function KeHoachNgayListClient(props: {
             maOrder: selectedDraftSegment.maOrder,
             khachHang: selectedDraftSegment.khachHang,
             duAn: selectedDraftSegment.duAn,
+            maCoc: selectedDraftSegment.maCoc || selectedDraftSegment.loaiCoc,
             loaiCoc: selectedDraftSegment.loaiCoc,
             tenDoan: selectedDraftSegment.tenDoan,
             chieuDaiM: Number(selectedDraftSegment.chieuDaiM || 0),
@@ -1114,7 +1116,10 @@ function DraftCreateSectionInner(props: {
                 <div className="space-y-4">
                   <SummaryRow label="Khách hàng" value={props.selectedDraftSegment.khachHang} />
                   <SummaryRow label="Dự án" value={props.selectedDraftSegment.duAn} />
-                  <SummaryRow label="Loại cọc" value={props.selectedDraftSegment.loaiCoc} />
+                  <SummaryRow
+                    label="Mã cọc"
+                    value={props.selectedDraftSegment.maCoc || props.selectedDraftSegment.loaiCoc}
+                  />
                 </div>
 
                 <div className="space-y-4">
@@ -1137,7 +1142,7 @@ function DraftCreateSectionInner(props: {
                 <tr style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 5%, white)' }}>
                   <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase">Đơn hàng</th>
                   <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase">Đoạn</th>
-                  <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase">Loại cọc</th>
+                  <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase">Mã cọc</th>
                   <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase text-right">SL đặt</th>
                   <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase text-right">Đã lên KH</th>
                   <th className="px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase text-right">Đã QC</th>
@@ -1159,7 +1164,7 @@ function DraftCreateSectionInner(props: {
                       </div>
                     </td>
                     <td className="px-4 py-3">{line.tenDoan}</td>
-                    <td className="px-4 py-3">{line.loaiCoc}</td>
+                    <td className="px-4 py-3">{line.maCoc || line.loaiCoc}</td>
                     <td className="px-4 py-3 text-right">{formatNumber(line.soLuongDat)}</td>
                     <td className="px-4 py-3 text-right">{formatNumber(line.soLuongDaLenKeHoach)}</td>
                     <td className="px-4 py-3 text-right">{formatNumber(line.soLuongDaQc)}</td>

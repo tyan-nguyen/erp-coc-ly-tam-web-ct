@@ -27,6 +27,21 @@ function normalizeText(value: unknown) {
   return String(value || '').trim()
 }
 
+function isMissingRelationError(error: unknown, relationName: string) {
+  const message = String(
+    error instanceof Error
+      ? error.message
+      : error && typeof error === 'object' && 'message' in error
+        ? (error as { message: unknown }).message
+        : ''
+  ).toLowerCase()
+
+  return (
+    (message.includes('relation') && message.includes(relationName.toLowerCase())) ||
+    (message.includes('schema cache') && message.includes(relationName.toLowerCase()))
+  )
+}
+
 function toNumber(value: unknown, fallback = 0) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
@@ -45,7 +60,7 @@ async function buildCountSheetCode(supabase: AnySupabase) {
   const prefix = `KK-TP-${yy}${mm}${dd}-`
 
   const { data, error } = await supabase
-    .from('finished_goods_count_sheet')
+    .from('inventory_count_sheet')
     .select('count_sheet_code')
     .ilike('count_sheet_code', `${prefix}%`)
     .limit(500)
@@ -113,6 +128,35 @@ function buildOpeningBalanceSystemNote(countSheetCode: string, lineNo: number, u
   if (!normalizedUserNote) return marker
   if (normalizedUserNote.includes(marker)) return normalizedUserNote
   return `${marker} | ${normalizedUserNote}`
+}
+
+function isUuidText(value: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalizeText(value))
+}
+
+function readNonUuidText(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeText(value)
+    if (normalized && !isUuidText(normalized)) return normalized
+  }
+  return ''
+}
+
+function buildFinishedGoodsCountItemLabel(input: {
+  itemLabel?: string | null
+  maCoc?: string | null
+  loaiCoc: string
+  tenDoan: string
+  chieuDaiM: number
+}) {
+  const maCoc = normalizeText(input.maCoc)
+  const loaiCoc = normalizeText(input.loaiCoc)
+  const tenDoan = normalizeText(input.tenDoan)
+  const chieuDaiM = round3(input.chieuDaiM)
+  if (maCoc && !isUuidText(maCoc)) {
+    return `${maCoc} | ${tenDoan} | ${chieuDaiM}m`
+  }
+  return normalizeText(input.itemLabel) || `${loaiCoc} | ${tenDoan} | ${chieuDaiM}m`
 }
 
 async function loadOpeningBalancePrintableLotsByLine(input: {
@@ -341,6 +385,8 @@ export async function loadFinishedGoodsCountCatalogOptions(
   return pageData.summaryRows.map((row) => ({
     itemKey: row.itemKey,
     itemLabel: row.itemLabel,
+    templateId: row.templateId,
+    maCoc: row.maCoc,
     loaiCoc: row.loaiCoc,
     tenDoan: row.tenDoan,
     chieuDaiM: row.chieuDaiM,
@@ -474,7 +520,7 @@ export async function createFinishedGoodsCountSheetDraft(input: {
   }
 
   const currentRows = await loadFinishedGoodsCurrentInventoryRows(input.supabase)
-  const countSheetCode = await buildCountSheetCode(supabase)
+  const countSheetCode = await buildCountSheetCode(input.supabase)
   const note = normalizeText(input.note)
   const countDate = normalizeText(input.countDate)
   if (!countDate) throw new Error('Phiếu kiểm kê cọc cần có ngày kiểm kê.')
@@ -508,7 +554,7 @@ export async function createFinishedGoodsCountSheetDraft(input: {
     item_type: 'FINISHED_GOOD',
     item_id: row.itemKey,
     item_code: row.itemKey,
-    item_name: row.itemLabel,
+    item_name: buildFinishedGoodsCountItemLabel(row),
     item_group: 'CỌC THÀNH PHẨM',
     unit: 'cây',
     system_qty: round3(input.countType === 'TON_DAU_KY' ? 0 : row.systemQty),
@@ -517,10 +563,12 @@ export async function createFinishedGoodsCountSheetDraft(input: {
     variance_pct: 0,
     allowed_loss_pct: 0,
     note: normalizeText(row.note) || null,
-    payload_json: {
-      inventoryDomain: 'FINISHED_GOODS',
-      itemKey: row.itemKey,
-      loaiCoc: row.loaiCoc,
+      payload_json: {
+        inventoryDomain: 'FINISHED_GOODS',
+        itemKey: row.itemKey,
+        templateId: row.templateId || '',
+        maCoc: row.maCoc || '',
+        loaiCoc: row.loaiCoc,
       tenDoan: row.tenDoan,
       chieuDaiM: row.chieuDaiM,
       countMode: input.countType,
@@ -557,6 +605,8 @@ export async function createFinishedGoodsCountSheetDraft(input: {
       const systemNote = buildOpeningBalanceSystemNote(countSheetCode, toNumber(record.line_no), sourceLine.note)
       const createdLot = await createDraftOpeningBalanceLotAndSerials(input.supabase, {
         loaiCoc: sourceLine.loaiCoc,
+        templateId: sourceLine.templateId || '',
+        maCoc: sourceLine.maCoc || '',
         tenDoan: sourceLine.tenDoan,
         chieuDaiM: sourceLine.chieuDaiM,
         openingDate: countDate,
@@ -573,6 +623,8 @@ export async function createFinishedGoodsCountSheetDraft(input: {
           payload_json: {
             inventoryDomain: 'FINISHED_GOODS',
             itemKey: sourceLine.itemKey,
+            templateId: sourceLine.templateId || '',
+            maCoc: sourceLine.maCoc || '',
             loaiCoc: sourceLine.loaiCoc,
             tenDoan: sourceLine.tenDoan,
             chieuDaiM: sourceLine.chieuDaiM,
@@ -614,6 +666,8 @@ export async function createFinishedGoodsCountSheetDraft(input: {
             payload_json: {
               inventoryDomain: 'FINISHED_GOODS',
               itemKey: row.itemKey,
+              templateId: row.templateId,
+              maCoc: row.maCoc,
               loaiCoc: row.loaiCoc,
               tenDoan: row.tenDoan,
               chieuDaiM: row.chieuDaiM,
@@ -746,8 +800,35 @@ export async function loadFinishedGoodsCountDetail(input: {
     }
   }
 
+  const templateIdsInLines = Array.from(
+    new Set(
+      ((lineRows ?? []) as Array<Record<string, unknown>>)
+        .map((row) => normalizeText(((row.payload_json as Record<string, unknown> | null) || {}).templateId))
+        .filter(Boolean)
+    )
+  )
+  const maCocByTemplateId = new Map<string, string>()
+  if (templateIdsInLines.length) {
+    const { data: templateRows, error: templateError } = await input.supabase
+      .from('dm_coc_template')
+      .select('*')
+      .in('template_id', templateIdsInLines)
+
+    if (templateError) {
+      if (!isMissingRelationError(templateError, 'dm_coc_template')) throw templateError
+    } else {
+      for (const row of (templateRows ?? []) as Array<Record<string, unknown>>) {
+        const templateId = normalizeText(row.template_id)
+        const maCoc = readNonUuidText(row.ma_coc, row.ma_coc_template)
+        if (templateId && maCoc) maCocByTemplateId.set(templateId, maCoc)
+      }
+    }
+  }
+
   const lines: FinishedGoodsCountDetailLine[] = ((lineRows ?? []) as Array<Record<string, unknown>>).map((row) => {
     const payload = ((row.payload_json as Record<string, unknown> | null) || {}) as Record<string, unknown>
+    const templateId = normalizeText(payload.templateId)
+    const maCoc = readNonUuidText(payload.maCoc, maCocByTemplateId.get(templateId))
     const currentSerialRows = serialsByLine.get(String(row.count_line_id || '')) || []
     const generatedLotsMap = new Map<
       string,
@@ -797,7 +878,15 @@ export async function loadFinishedGoodsCountDetail(input: {
       countLineId: String(row.count_line_id || ''),
       lineNo,
       itemKey: normalizeText(row.item_id),
-      itemLabel: normalizeText(row.item_name),
+      itemLabel: buildFinishedGoodsCountItemLabel({
+        itemLabel: normalizeText(row.item_name),
+        maCoc,
+        loaiCoc: normalizeText(payload.loaiCoc),
+        tenDoan: normalizeText(payload.tenDoan),
+        chieuDaiM: round3(toNumber(payload.chieuDaiM)),
+      }),
+      templateId,
+      maCoc,
       loaiCoc: normalizeText(payload.loaiCoc),
       tenDoan: normalizeText(payload.tenDoan),
       chieuDaiM: round3(toNumber(payload.chieuDaiM)),
@@ -916,6 +1005,8 @@ export async function saveFinishedGoodsCountDraft(input: {
         countSheetCode: detail.countSheetCode,
         countLineId: lineInput.countLineId,
         countDate: detail.countDate,
+        templateId: baseLine.templateId,
+        maCoc: baseLine.maCoc,
         loaiCoc: baseLine.loaiCoc,
         tenDoan: baseLine.tenDoan,
         chieuDaiM: baseLine.chieuDaiM,
@@ -933,6 +1024,8 @@ export async function saveFinishedGoodsCountDraft(input: {
         countSheetCode: detail.countSheetCode,
         countLineId: lineInput.countLineId,
         countDate: detail.countDate,
+        templateId: baseLine.templateId,
+        maCoc: baseLine.maCoc,
         loaiCoc: baseLine.loaiCoc,
         tenDoan: baseLine.tenDoan,
         chieuDaiM: baseLine.chieuDaiM,
@@ -972,6 +1065,8 @@ export async function saveFinishedGoodsCountDraft(input: {
         payload_json: {
           inventoryDomain: 'FINISHED_GOODS',
           itemKey: line.itemKey,
+          templateId: line.templateId || '',
+          maCoc: line.maCoc || '',
           loaiCoc: line.loaiCoc,
           tenDoan: line.tenDoan,
           chieuDaiM: line.chieuDaiM,
@@ -1064,6 +1159,8 @@ async function createUnexpectedFoundLot(input: {
   countSheetCode: string
   countLineId: string
   countDate: string
+  templateId?: string | null
+  maCoc?: string | null
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -1100,6 +1197,8 @@ async function createUnexpectedFoundLot(input: {
     .from('production_lot')
     .insert({
       lot_code: lotCode,
+      template_id: normalizeText(input.templateId) || null,
+      ma_coc: normalizeText(input.maCoc) || null,
       loai_coc: normalizeText(input.loaiCoc),
       ten_doan: normalizeText(input.tenDoan),
       chieu_dai_m: round3(input.chieuDaiM),
@@ -1119,6 +1218,8 @@ async function createUnexpectedFoundLot(input: {
   const serialRows = Array.from({ length: quantity }, (_, index) => ({
     serial_code: buildSerialCode(lotCode, index + 1),
     lot_id: lotId,
+    template_id: normalizeText(input.templateId) || null,
+    ma_coc: normalizeText(input.maCoc) || null,
     loai_coc: normalizeText(input.loaiCoc),
     ten_doan: normalizeText(input.tenDoan),
     chieu_dai_m: round3(input.chieuDaiM),
@@ -1285,6 +1386,8 @@ export async function approveFinishedGoodsCountAndApply(input: {
       openingDate: detail.countDate,
       lines: detail.lines.map((line) => ({
         lineNo: line.lineNo,
+        templateId: line.templateId || '',
+        maCoc: line.maCoc || '',
         loaiCoc: line.loaiCoc,
         tenDoan: line.tenDoan,
         chieuDaiM: line.chieuDaiM,
@@ -1301,6 +1404,8 @@ export async function approveFinishedGoodsCountAndApply(input: {
       if (!quantity) continue
 
       await createOpeningBalanceLotAndSerials(input.supabase, {
+        templateId: line.templateId || '',
+        maCoc: line.maCoc || '',
         loaiCoc: line.loaiCoc,
         tenDoan: line.tenDoan,
         chieuDaiM: line.chieuDaiM,

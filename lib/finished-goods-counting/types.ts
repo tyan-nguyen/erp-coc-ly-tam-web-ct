@@ -13,6 +13,8 @@ export type FinishedGoodsCountQualityProposal = 'DAT' | 'LOI' | 'HUY'
 export type FinishedGoodsCountCatalogOption = {
   itemKey: string
   itemLabel: string
+  templateId?: string
+  maCoc?: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -26,6 +28,8 @@ export type FinishedGoodsCountDraftLine = {
   id: string
   itemKey: string
   itemLabel: string
+  templateId?: string
+  maCoc?: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -70,6 +74,8 @@ export type FinishedGoodsCountDetailLine = {
   lineNo: number
   itemKey: string
   itemLabel: string
+  templateId?: string
+  maCoc?: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number

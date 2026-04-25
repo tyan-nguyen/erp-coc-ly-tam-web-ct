@@ -25,6 +25,8 @@ export function buildInventorySummaryRows(
       ({
         itemKey: row.itemKey,
         itemLabel: row.itemLabel,
+        templateId: row.templateId,
+        maCoc: row.maCoc,
         loaiCoc: row.loaiCoc,
         tenDoan: deriveStockSegmentGroup(row.tenDoan),
         chieuDaiM: row.chieuDaiM,
@@ -125,6 +127,11 @@ export function buildSelectedItemDetail(
   return {
     itemKey: filters.selectedItemKey,
     itemLabel: summary?.itemLabel || scopedSerials[0].itemLabel,
+    templateId: summary?.templateId || scopedSerials[0].templateId,
+    maCoc: summary?.maCoc || scopedSerials[0].maCoc,
+    loaiCoc: summary?.loaiCoc || scopedSerials[0].loaiCoc,
+    tenDoan: summary?.tenDoan || scopedSerials[0].tenDoan,
+    chieuDaiM: summary?.chieuDaiM || scopedSerials[0].chieuDaiM,
     physicalQty: useScopedCounts ? scopedSerials.length : summary?.physicalQty || scopedSerials.length,
     projectQty:
       useScopedCounts

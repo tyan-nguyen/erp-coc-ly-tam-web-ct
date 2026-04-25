@@ -34,6 +34,29 @@ function formatStatusLabel(value: string) {
   return value || '-'
 }
 
+function formatCountTypeLabel(value: InventoryCountingPageData['savedSheets'][number]['countType']) {
+  return value === 'OPENING_BALANCE' ? 'Nhập tồn đầu kỳ' : 'Kiểm kê vận hành'
+}
+
+function CountSheetMetric(props: { label: string; value: string | number; alignRight?: boolean }) {
+  return (
+    <div className={['min-w-0', props.alignRight ? 'text-right' : ''].filter(Boolean).join(' ')}>
+      <div className="app-muted text-[11px] uppercase tracking-[0.18em]">{props.label}</div>
+      <div className="mt-1 text-sm">{props.value}</div>
+    </div>
+  )
+}
+
+const tableHeaderClass = 'px-4 py-3 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--color-muted)]'
+const tableHeaderStyle = {
+  backgroundColor: 'color-mix(in srgb, var(--color-primary) 4%, white)',
+}
+const stickyHeaderClass = `sticky top-0 z-20 border-b ${tableHeaderClass}`
+const stickyHeaderStyle = {
+  borderColor: 'var(--color-border)',
+  backgroundColor: 'color-mix(in srgb, var(--color-primary) 4%, white)',
+}
+
 function buildDraftLineFromOption(option: InventoryCountCatalogOption): InventoryCountDraftLine {
   return {
     id: `line-${option.itemType}-${option.value}`,
@@ -232,11 +255,11 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
   }
 
   return (
-    <div className="app-surface overflow-hidden rounded-[28px]">
+    <div className="app-surface overflow-hidden rounded-2xl">
       {canCreateSheets ? (
-        <section className="px-6 py-6">
+        <section className="px-6 py-5">
           <div className="flex items-center justify-between gap-4">
-            <h2 className="text-2xl font-semibold">Tạo phiếu kiểm kê</h2>
+            <h2 className="text-2xl font-semibold">Tạo phiếu kiểm kê vật tư</h2>
             <button
               type="button"
               onClick={addEmptyLine}
@@ -247,7 +270,7 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
             </button>
           </div>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <div className="mt-6 grid gap-4 md:grid-cols-3">
             <label className="space-y-2 text-sm">
               <span className="font-medium">Loại kiểm kê</span>
               <select
@@ -270,22 +293,33 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
                 style={{ borderColor: 'var(--color-border)' }}
               />
             </label>
+            <label className="space-y-2 text-sm">
+              <span className="font-medium">Ghi chú</span>
+              <input
+                type="text"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Ví dụ: kiểm kê kho NVL đầu tháng"
+                className="w-full rounded-xl border px-3 py-2"
+                style={{ borderColor: 'var(--color-border)' }}
+              />
+            </label>
           </div>
 
           {saveMessage ? <div className="mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700">{saveMessage}</div> : null}
           {saveError ? <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700">{saveError}</div> : null}
 
-          <div className="mt-6 overflow-x-auto rounded-2xl border" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="mt-6 overflow-x-auto border-t" style={{ borderColor: 'var(--color-border)' }}>
             <table className="min-w-full text-sm">
-              <thead className="sticky top-0 z-10 bg-black/[0.03] text-left">
+              <thead className="text-left">
                 <tr>
-                  <th className="px-4 py-3 font-semibold whitespace-nowrap">Mặt hàng</th>
-                  <th className="px-4 py-3 font-semibold whitespace-nowrap">Nhóm</th>
-                  <th className="px-4 py-3 font-semibold whitespace-nowrap">ĐVT</th>
-                  <th className="px-4 py-3 font-semibold whitespace-nowrap">Tồn hệ thống</th>
-                  <th className="px-4 py-3 font-semibold whitespace-nowrap">SL kiểm kê</th>
-                  <th className="px-4 py-3 font-semibold whitespace-nowrap">Hao hụt</th>
-                  <th className="px-4 py-3 font-semibold text-right"></th>
+                  <th className={`${tableHeaderClass} whitespace-nowrap`} style={tableHeaderStyle}>Mặt hàng</th>
+                  <th className={`${tableHeaderClass} whitespace-nowrap`} style={tableHeaderStyle}>Nhóm</th>
+                  <th className={`${tableHeaderClass} whitespace-nowrap`} style={tableHeaderStyle}>ĐVT</th>
+                  <th className={`${tableHeaderClass} whitespace-nowrap`} style={tableHeaderStyle}>Tồn hệ thống</th>
+                  <th className={`${tableHeaderClass} whitespace-nowrap`} style={tableHeaderStyle}>SL kiểm kê</th>
+                  <th className={`${tableHeaderClass} whitespace-nowrap`} style={tableHeaderStyle}>Hao hụt</th>
+                  <th className={`${tableHeaderClass} text-right`} style={tableHeaderStyle}></th>
                 </tr>
               </thead>
               <tbody>
@@ -332,7 +366,7 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
                         <button
                           type="button"
                           onClick={() => setLines((current) => current.filter((item) => item.id !== line.id))}
-                          className="text-lg leading-none text-slate-500"
+                          className="inline-flex h-7 w-7 items-center justify-center text-sm font-normal leading-none text-[var(--color-muted)] hover:text-slate-950"
                           aria-label="Bỏ dòng"
                         >
                           x
@@ -351,23 +385,12 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
             </table>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
-            <label className="min-w-[320px] flex-1 space-y-2 text-sm">
-              <span className="font-medium">Ghi chú</span>
-              <input
-                type="text"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder="Ví dụ: kiểm kê kho NVL đầu tháng"
-                className="w-full rounded-xl border px-3 py-2"
-                style={{ borderColor: 'var(--color-border)' }}
-              />
-            </label>
+          <div className="mt-4 flex justify-end border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
             <button
               type="button"
               onClick={handleCreateSheet}
               disabled={isSaving}
-              className="rounded-xl px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              className="rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
               style={{ background: 'var(--color-primary)' }}
             >
               {isSaving ? 'Đang lưu phiếu...' : 'Lưu phiếu kiểm kê'}
@@ -376,24 +399,58 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
         </section>
       ) : null}
 
-      <section className="border-t px-6 py-6" style={{ borderColor: 'var(--color-border)' }}>
-        <div>
-          <h2 className="text-2xl font-semibold">Phiếu kiểm kê đã lưu</h2>
+      <section className="border-t" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="px-6 py-5">
+          <h2 className="text-xl font-semibold">Phiếu kiểm kê gần đây</h2>
         </div>
 
-        <div className="mt-6 max-h-[420px] overflow-auto rounded-2xl border" style={{ borderColor: 'var(--color-border)' }}>
-          <table className="min-w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-black/[0.03] text-left">
+        <div className="divide-y border-y md:hidden" style={{ borderColor: 'var(--color-border)' }}>
+          {props.pageData.savedSheets.length ? (
+            props.pageData.savedSheets.map((sheet) => (
+              <button
+                key={sheet.countSheetId}
+                type="button"
+                onClick={() => void handleToggleSheet(sheet.countSheetId)}
+                className="block w-full px-5 py-5 text-left transition-colors hover:bg-[color:color-mix(in_srgb,var(--color-primary)_3%,white)]"
+                style={{
+                  backgroundColor: activeSheetId === sheet.countSheetId ? 'color-mix(in srgb, var(--color-primary) 4%, white)' : undefined,
+                }}
+              >
+                <div className="min-w-0">
+                  <div className="break-all text-lg font-semibold leading-snug">{sheet.countSheetCode}</div>
+                  <div className="app-muted mt-2 text-sm">{formatCountTypeLabel(sheet.countType)}</div>
+                </div>
+                <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4">
+                  <CountSheetMetric label="Ngày kiểm kê" value={formatDateLabel(sheet.countDate)} />
+                  <CountSheetMetric label="Trạng thái" value={formatStatusLabel(sheet.status)} />
+                  <CountSheetMetric label="Số dòng" value={sheet.lineCount} />
+                  <CountSheetMetric label="SL kiểm" value={formatNumber(sheet.countedQtyTotal)} />
+                  <CountSheetMetric label="Tồn hệ thống" value={formatNumber(sheet.systemQtyTotal)} />
+                  <CountSheetMetric label="Chênh lệch" value={formatNumber(sheet.varianceQtyTotal)} />
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="px-5 py-10 text-center text-sm app-muted">
+              {props.pageData.schemaReady
+                ? 'Chưa có phiếu kiểm kê nào được lưu.'
+                : 'Schema kiểm kê chưa sẵn sàng nên chưa thể hiện danh sách phiếu từ DB.'}
+            </div>
+          )}
+        </div>
+
+        <div className="hidden max-h-[56vh] overflow-auto border-t md:block" style={{ borderColor: 'var(--color-border)' }}>
+          <table className="min-w-full border-separate border-spacing-0 text-sm">
+            <thead className="text-left">
               <tr>
-                <th className="px-4 py-3 font-semibold">Mã phiếu</th>
-                <th className="px-4 py-3 font-semibold">Loại</th>
-                <th className="px-4 py-3 font-semibold">Ngày</th>
-                <th className="px-4 py-3 font-semibold">Trạng thái</th>
-                <th className="px-4 py-3 font-semibold">Số dòng</th>
-                <th className="px-4 py-3 font-semibold">Tồn hệ thống</th>
-                <th className="px-4 py-3 font-semibold">SL kiểm kê</th>
-                <th className="px-4 py-3 font-semibold">Chênh lệch</th>
-                <th className="px-4 py-3 font-semibold">Tạo lúc</th>
+                <th className={stickyHeaderClass} style={stickyHeaderStyle}>Mã phiếu</th>
+                <th className={stickyHeaderClass} style={stickyHeaderStyle}>Loại</th>
+                <th className={stickyHeaderClass} style={stickyHeaderStyle}>Ngày kiểm kê</th>
+                <th className={stickyHeaderClass} style={stickyHeaderStyle}>Trạng thái</th>
+                <th className={`${stickyHeaderClass} text-right`} style={stickyHeaderStyle}>Dòng</th>
+                <th className={`${stickyHeaderClass} text-right`} style={stickyHeaderStyle}>Tồn hệ thống</th>
+                <th className={`${stickyHeaderClass} text-right`} style={stickyHeaderStyle}>SL kiểm</th>
+                <th className={`${stickyHeaderClass} text-right`} style={stickyHeaderStyle}>Chênh lệch</th>
               </tr>
             </thead>
             <tbody>
@@ -408,22 +465,21 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
                     }}
                     onClick={() => void handleToggleSheet(sheet.countSheetId)}
                   >
-                    <td className="px-4 py-3 font-medium">{sheet.countSheetCode}</td>
-                    <td className="px-4 py-3">{sheet.countType === 'OPENING_BALANCE' ? 'Nhập tồn đầu kỳ' : 'Kiểm kê vận hành'}</td>
-                    <td className="px-4 py-3">{formatDateLabel(sheet.countDate)}</td>
-                    <td className="px-4 py-3">{formatStatusLabel(sheet.status)}</td>
-                    <td className="px-4 py-3">{sheet.lineCount}</td>
-                    <td className="px-4 py-3">{formatNumber(sheet.systemQtyTotal)}</td>
-                    <td className="px-4 py-3">{formatNumber(sheet.countedQtyTotal)}</td>
-                    <td className={`px-4 py-3 ${sheet.varianceQtyTotal === 0 ? '' : sheet.varianceQtyTotal > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    <td className="px-4 py-4 font-semibold">{sheet.countSheetCode}</td>
+                    <td className="px-4 py-4">{formatCountTypeLabel(sheet.countType)}</td>
+                    <td className="px-4 py-4">{formatDateLabel(sheet.countDate)}</td>
+                    <td className="px-4 py-4">{formatStatusLabel(sheet.status)}</td>
+                    <td className="px-4 py-4 text-right">{sheet.lineCount}</td>
+                    <td className="px-4 py-4 text-right">{formatNumber(sheet.systemQtyTotal)}</td>
+                    <td className="px-4 py-4 text-right">{formatNumber(sheet.countedQtyTotal)}</td>
+                    <td className={`px-4 py-4 text-right ${sheet.varianceQtyTotal === 0 ? '' : sheet.varianceQtyTotal > 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                       {formatNumber(sheet.varianceQtyTotal)}
                     </td>
-                    <td className="px-4 py-3">{formatDateLabel(sheet.createdAt.slice(0, 10))}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-sm app-muted">
+                  <td colSpan={8} className="px-4 py-8 text-center text-sm app-muted">
                     {props.pageData.schemaReady
                       ? 'Chưa có phiếu kiểm kê nào được lưu.'
                       : 'Schema kiểm kê chưa sẵn sàng nên chưa thể hiện danh sách phiếu từ DB.'}
@@ -435,7 +491,7 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
         </div>
 
         {activeSheetId ? (
-          <div className="mt-6 border-t pt-6" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="border-t px-6 py-6" style={{ borderColor: 'var(--color-border)' }}>
             {detailLoadingId === activeSheetId ? (
               <div className="text-sm app-muted">Đang tải chi tiết phiếu kiểm kê...</div>
             ) : detailError ? (

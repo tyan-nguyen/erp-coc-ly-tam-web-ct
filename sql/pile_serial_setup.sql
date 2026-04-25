@@ -9,6 +9,8 @@ create table if not exists public.production_lot (
   order_id uuid null,
   boc_id uuid null,
   quote_id uuid null,
+  template_id uuid null,
+  ma_coc text null,
   loai_coc text not null,
   ten_doan text not null,
   chieu_dai_m numeric(12,3) not null default 0,
@@ -27,6 +29,8 @@ alter table public.production_lot add column if not exists plan_line_id uuid nul
 alter table public.production_lot add column if not exists order_id uuid null;
 alter table public.production_lot add column if not exists boc_id uuid null;
 alter table public.production_lot add column if not exists quote_id uuid null;
+alter table public.production_lot add column if not exists template_id uuid null;
+alter table public.production_lot add column if not exists ma_coc text null;
 alter table public.production_lot add column if not exists loai_coc text not null default '';
 alter table public.production_lot add column if not exists ten_doan text not null default '';
 alter table public.production_lot add column if not exists chieu_dai_m numeric(12,3) not null default 0;
@@ -45,6 +49,7 @@ create unique index if not exists uq_production_lot_voucher_line
 create index if not exists idx_production_lot_plan_id on public.production_lot(plan_id);
 create index if not exists idx_production_lot_order_id on public.production_lot(order_id);
 create index if not exists idx_production_lot_boc_id on public.production_lot(boc_id);
+create index if not exists idx_production_lot_template_id on public.production_lot(template_id);
 
 create table if not exists public.warehouse_location (
   location_id uuid primary key default gen_random_uuid(),
@@ -76,6 +81,8 @@ create table if not exists public.pile_serial (
   order_id uuid null,
   boc_id uuid null,
   quote_id uuid null,
+  template_id uuid null,
+  ma_coc text null,
   loai_coc text not null,
   ten_doan text not null,
   chieu_dai_m numeric(12,3) not null default 0,
@@ -98,6 +105,8 @@ alter table public.pile_serial add column if not exists warehouse_issue_voucher_
 alter table public.pile_serial add column if not exists order_id uuid null;
 alter table public.pile_serial add column if not exists boc_id uuid null;
 alter table public.pile_serial add column if not exists quote_id uuid null;
+alter table public.pile_serial add column if not exists template_id uuid null;
+alter table public.pile_serial add column if not exists ma_coc text null;
 alter table public.pile_serial add column if not exists loai_coc text not null default '';
 alter table public.pile_serial add column if not exists ten_doan text not null default '';
 alter table public.pile_serial add column if not exists chieu_dai_m numeric(12,3) not null default 0;
@@ -117,8 +126,48 @@ alter table public.pile_serial add column if not exists is_active boolean not nu
 
 create index if not exists idx_pile_serial_lot_id on public.pile_serial(lot_id);
 create index if not exists idx_pile_serial_order_id on public.pile_serial(order_id);
+create index if not exists idx_pile_serial_template_id on public.pile_serial(template_id);
 create index if not exists idx_pile_serial_status on public.pile_serial(lifecycle_status, qc_status, disposition_status);
 create index if not exists idx_pile_serial_location on public.pile_serial(current_location_id);
+
+alter table public.dm_coc_template add column if not exists ma_coc text null;
+
+with template_code_source as (
+  select
+    t.template_id,
+    regexp_replace(upper(trim(coalesce(to_jsonb(t)->>'mac_be_tong', ''))), '^M', '') as mac_be_tong,
+    upper(trim(coalesce(to_jsonb(t)->>'mac_thep', substring(coalesce(t.loai_coc, '') from '-\\s*([ABC])\\d+'), ''))) as mac_thep,
+    trim(coalesce(to_jsonb(t)->>'do_ngoai', substring(coalesce(t.loai_coc, '') from '[ABC](\\d+)'))) as do_ngoai,
+    trim(coalesce(to_jsonb(t)->>'chieu_day', substring(coalesce(t.loai_coc, '') from '-\\s*[ABC]\\d+\\s*-\\s*(\\d+(?:\\.\\d+)?)'))) as chieu_day
+  from public.dm_coc_template t
+  where t.is_active = true
+),
+ranked_template_code as (
+  select
+    template_id,
+    'M' || mac_be_tong || ' - ' || mac_thep || do_ngoai || ' - ' || chieu_day || ' - ' ||
+      row_number() over (
+        partition by mac_be_tong, mac_thep, do_ngoai, chieu_day
+        order by template_id::text
+      )::text as generated_ma_coc
+  from template_code_source
+  where mac_be_tong <> '' and mac_thep <> '' and do_ngoai <> '' and chieu_day <> ''
+)
+update public.dm_coc_template t
+set ma_coc = ranked.generated_ma_coc
+from ranked_template_code ranked
+where t.template_id = ranked.template_id
+  and (
+    coalesce(t.ma_coc, '') = ''
+    or t.ma_coc = t.template_id::text
+    or t.ma_coc ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    or t.ma_coc is distinct from ranked.generated_ma_coc
+  );
+
+-- IMPORTANT:
+-- Do not backfill production_lot/pile_serial by loai_coc anymore.
+-- Once multiple templates share the same loai_coc, any update-by-loai_coc can assign wrong identity.
+-- New environments must seed template_id/ma_coc from upstream transactional data, not infer them here.
 
 create table if not exists public.pile_serial_history (
   history_id uuid primary key default gen_random_uuid(),

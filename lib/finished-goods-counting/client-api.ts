@@ -44,6 +44,8 @@ export type FinishedGoodsCountDetailResult = {
     lineNo: number
     itemKey: string
     itemLabel: string
+    templateId?: string
+    maCoc?: string
     loaiCoc: string
     tenDoan: string
     chieuDaiM: number
@@ -91,6 +93,8 @@ export async function submitCreateFinishedGoodsCountSheet(input: {
     id: string
     itemKey: string
     itemLabel: string
+    templateId?: string
+    maCoc?: string
     loaiCoc: string
     tenDoan: string
     chieuDaiM: number

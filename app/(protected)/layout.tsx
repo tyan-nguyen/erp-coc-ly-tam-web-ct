@@ -12,6 +12,8 @@ import {
   isSalesAccountingRole,
   isTechnicalRole,
   isWarehouseRole,
+  canViewProductionVarianceReport,
+  canViewAuditLog,
 } from '@/lib/auth/roles'
 import { canAccessMasterData, type MasterDataPermissionKey } from '@/lib/master-data/permissions'
 import { loadWarehouseLocationAssignmentPageData } from '@/lib/ton-kho-thanh-pham/location-assignment-page-data'
@@ -111,6 +113,7 @@ const NAV_ITEMS = [
     label: 'Sản xuất',
     children: [
       { href: '/san-xuat/ke-hoach-ngay', label: 'Kế hoạch sản xuất ngày' },
+      { href: '/san-xuat/bao-cao-chenh-lech', label: 'Báo cáo chênh lệch SX' },
       { href: '/san-xuat/mua-coc-ngoai', label: 'Mua cọc ngoài' },
       { href: '/san-xuat/qc-nghiem-thu', label: 'Nghiệm thu QC' },
     ],
@@ -124,6 +127,12 @@ const NAV_ITEMS = [
     children: [
       { href: '/ton-kho/kiem-ke', label: 'Vật tư' },
       { href: '/ton-kho/thanh-pham/kiem-ke', label: 'Cọc thành phẩm' },
+    ],
+  },
+  {
+    label: 'Quản trị',
+    children: [
+      { href: '/quan-tri/nhat-ky-thao-tac', label: 'Nhật ký thao tác' },
     ],
   },
 ] satisfies NavItem[]
@@ -204,6 +213,7 @@ export default async function ProtectedLayout({
             children: [
               { href: '/ton-kho/nvl/mua-hang', label: 'Nguyên vật liệu' },
               { href: '/san-xuat/mua-coc-ngoai', label: 'Cọc thành phẩm' },
+              { href: '/san-xuat/bao-cao-chenh-lech', label: 'Báo cáo chênh lệch SX' },
             ],
           },
           {
@@ -248,7 +258,10 @@ export default async function ProtectedLayout({
           },
           {
             label: 'Sản xuất',
-            children: [{ href: '/san-xuat/ke-hoach-ngay', label: 'Kế hoạch sản xuất ngày' }],
+            children: [
+              { href: '/san-xuat/ke-hoach-ngay', label: 'Kế hoạch sản xuất ngày' },
+              { href: '/san-xuat/bao-cao-chenh-lech', label: 'Báo cáo chênh lệch SX' },
+            ],
           },
           {
             label: 'Tồn kho',
@@ -286,7 +299,10 @@ export default async function ProtectedLayout({
             },
             {
               label: 'Sản xuất',
-              children: [{ href: '/san-xuat/ke-hoach-ngay', label: 'Kế hoạch đã chốt' }],
+              children: [
+                { href: '/san-xuat/ke-hoach-ngay', label: 'Kế hoạch đã chốt' },
+                { href: '/san-xuat/bao-cao-chenh-lech', label: 'Báo cáo chênh lệch SX' },
+              ],
             },
           ]
         : inventoryCounterViewer
@@ -331,9 +347,12 @@ export default async function ProtectedLayout({
       return items
     }
 
-    const children = item.children.filter((child) =>
-      child.href === '/don-hang/phieu-xuat' ? canAccessShipmentVoucher : true
-    )
+    const children = item.children.filter((child) => {
+      if (child.href === '/don-hang/phieu-xuat') return canAccessShipmentVoucher
+      if (child.href === '/san-xuat/bao-cao-chenh-lech') return canViewProductionVarianceReport(profile.role)
+      if (child.href === '/quan-tri/nhat-ky-thao-tac') return canViewAuditLog(profile.role)
+      return true
+    })
 
     if (children.length > 0) {
       items.push({ ...item, children })

@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { deriveStockSegmentGroup } from '@/lib/ton-kho-thanh-pham/internal'
+import { buildStockIdentityKey, deriveStockSegmentGroup } from '@/lib/ton-kho-thanh-pham/internal'
 
 type AnySupabase = SupabaseClient
+const TEMPLATE_META_PREFIX = 'ERP_TEMPLATE_META::'
 
 export type ProductionLotInput = {
   warehouseIssueVoucherId: string
@@ -10,6 +11,8 @@ export type ProductionLotInput = {
   orderId: string | null
   bocId: string | null
   quoteId: string | null
+  templateId?: string | null
+  maCoc?: string | null
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -29,6 +32,8 @@ export type ProductionLotSummary = {
   lotCode: string
   productionDate: string
   loaiCoc: string
+  templateId?: string
+  maCoc?: string
   tenDoan: string
   chieuDaiM: number
   actualQty: number
@@ -41,6 +46,8 @@ export type PrintableSerialLabel = {
   serialId: string
   serialCode: string
   loaiCoc: string
+  templateId?: string | null
+  maCoc?: string | null
   tenDoan: string
   chieuDaiM: number
   productionDate: string
@@ -64,6 +71,8 @@ export type OpeningBalanceQualityStatus = 'DAT' | 'LOI'
 
 export type OpeningBalanceLotInput = {
   loaiCoc: string
+  templateId: string
+  maCoc: string
   tenDoan: string
   chieuDaiM: number
   openingDate: string
@@ -81,6 +90,8 @@ export type OpeningBalanceLotSummary = {
   countSheetCode: string
   countSheetStatus: string
   openingDate: string
+  templateId: string
+  maCoc: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -110,6 +121,8 @@ export type ExternalPurchaseLotInput = {
   purchaseOrderLineId: string
   lineNo: number
   requestId: string | null
+  templateId?: string | null
+  maCoc?: string | null
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -122,6 +135,108 @@ export type ExternalPurchaseLotInput = {
 
 function normalizeText(value: unknown) {
   return String(value || '').trim()
+}
+
+function isUuidText(value: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(normalizeText(value))
+}
+
+function readNonUuidText(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeText(value)
+    if (normalized && !isUuidText(normalized)) return normalized
+  }
+  return ''
+}
+
+function parseTemplateMeta(row: Record<string, unknown>) {
+  const raw = String(row.ghi_chu || '').trim()
+  const markerIndex = raw.indexOf(TEMPLATE_META_PREFIX)
+  if (markerIndex < 0) return {} as Record<string, unknown>
+  try {
+    return JSON.parse(raw.slice(markerIndex + TEMPLATE_META_PREFIX.length)) as Record<string, unknown>
+  } catch {
+    return {} as Record<string, unknown>
+  }
+}
+
+function looksLikeLoaiCocLabel(value: string) {
+  const normalized = normalizeText(value).toUpperCase()
+  return /^(PHC|PC)\s*-\s*[ABC]\d+\s*-\s*\d+(?:\.\d+)?$/.test(normalized)
+}
+
+function extractTemplateSteelGrade(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const explicit = normalizeText(row.mac_thep || meta.mac_thep).toUpperCase()
+  if (explicit) return explicit
+  const match = normalizeText(row.loai_coc).toUpperCase().match(/-\s*([ABC])\d+/)
+  return match?.[1] || ''
+}
+
+function extractTemplateDiameter(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const explicit = normalizeText(row.do_ngoai || meta.do_ngoai)
+  if (explicit) return explicit
+  const match = normalizeText(row.loai_coc).toUpperCase().match(/[ABC](\d+)/)
+  return match?.[1] || ''
+}
+
+function extractTemplateThickness(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const explicit = normalizeText(row.chieu_day || meta.chieu_day)
+  if (explicit) return explicit
+  const match = normalizeText(row.loai_coc).toUpperCase().match(/-\s*[ABC]\d+\s*-\s*(\d+(?:\.\d+)?)/)
+  return match?.[1] || ''
+}
+
+function buildTemplateCodePrefix(row: Record<string, unknown>) {
+  const meta = parseTemplateMeta(row)
+  const macBeTong = normalizeText(row.mac_be_tong || meta.mac_be_tong).toUpperCase().replace(/^M/, '')
+  const steelGrade = extractTemplateSteelGrade(row)
+  const diameter = extractTemplateDiameter(row)
+  const thickness = extractTemplateThickness(row)
+  if (!macBeTong || !steelGrade || !diameter || !thickness) return ''
+  return `M${macBeTong} - ${steelGrade}${diameter} - ${thickness}`
+}
+
+function buildTemplateDisplayCodeMap(rows: Array<Record<string, unknown>>) {
+  const sortedRows = [...rows].sort((a, b) => {
+    const aTime = new Date(normalizeText(a.created_at) || normalizeText(a.updated_at)).getTime() || 0
+    const bTime = new Date(normalizeText(b.created_at) || normalizeText(b.updated_at)).getTime() || 0
+    if (aTime !== bTime) return aTime - bTime
+    return normalizeText(a.template_id || a.id).localeCompare(normalizeText(b.template_id || b.id), 'vi')
+  })
+
+  const counts = new Map<string, number>()
+  const codeByTemplateId = new Map<string, string>()
+
+  for (const row of sortedRows) {
+    const templateId = normalizeText(row.template_id || row.id)
+    if (!templateId) continue
+
+    const prefix = buildTemplateCodePrefix(row)
+    const explicitCode = readNonUuidText(row.ma_coc, row.ma_coc_template)
+    const normalizedExplicitCode = looksLikeLoaiCocLabel(explicitCode) ? '' : explicitCode
+    if (!prefix) {
+      if (normalizedExplicitCode) codeByTemplateId.set(templateId, normalizedExplicitCode)
+      continue
+    }
+
+    const next = (counts.get(prefix) ?? 0) + 1
+    counts.set(prefix, next)
+    codeByTemplateId.set(templateId, normalizedExplicitCode.startsWith(`${prefix} - `) ? normalizedExplicitCode : `${prefix} - ${next}`)
+  }
+
+  return codeByTemplateId
+}
+
+async function loadTemplateRowsForCodeMap(supabase: AnySupabase) {
+  const { data, error } = await supabase.from('dm_coc_template').select('*').eq('is_active', true).limit(1000)
+  if (error) {
+    if (isMissingRelationError(error, 'dm_coc_template')) return [] as Array<Record<string, unknown>>
+    throw error
+  }
+  return (data ?? []) as Array<Record<string, unknown>>
 }
 
 function toNumber(value: unknown, fallback = 0) {
@@ -212,6 +327,18 @@ function buildExternalPurchaseSystemNote(
   return `${marker} | ${normalizedUserNote}`
 }
 
+function requireTemplateIdentity(
+  input: { templateId?: string | null; maCoc?: string | null; loaiCoc: string },
+  contextLabel: string
+) {
+  const templateId = normalizeText(input.templateId)
+  const maCoc = normalizeText(input.maCoc)
+  if (templateId || maCoc) {
+    return { templateId, maCoc }
+  }
+  throw new Error(`${contextLabel} thiếu template_id/ma_coc. Hệ thống không còn cho phép suy identity từ loại cọc (${normalizeText(input.loaiCoc) || '-'}) nữa.`)
+}
+
 function compareLabelRows(
   a: { createdAt: string; lotCode: string; serialCode: string },
   b: { createdAt: string; lotCode: string; serialCode: string }
@@ -228,6 +355,8 @@ async function buildDisplaySequenceBySerialId(
   labels: Array<{
     serialId: string
     serialCode: string
+    templateId?: string | null
+    maCoc?: string | null
     loaiCoc: string
     tenDoan: string
     chieuDaiM: number
@@ -241,7 +370,11 @@ async function buildDisplaySequenceBySerialId(
     new Set(
       labels.map((label) =>
         [
-          normalizeText(label.loaiCoc),
+          buildStockIdentityKey({
+            templateId: normalizeText(label.templateId),
+            maCoc: normalizeText(label.maCoc),
+            loaiCoc: normalizeText(label.loaiCoc),
+          }),
           deriveStockSegmentGroup(label.tenDoan),
           String(round3(label.chieuDaiM)),
           normalizeText(label.productionDate),
@@ -253,16 +386,25 @@ async function buildDisplaySequenceBySerialId(
   if (!scopedKeys.length) return sequenceBySerialId
 
   const targetDates = Array.from(new Set(labels.map((label) => normalizeText(label.productionDate)).filter(Boolean)))
-  const targetLoaiCoc = Array.from(new Set(labels.map((label) => normalizeText(label.loaiCoc)).filter(Boolean)))
+  const targetTemplateIds = Array.from(new Set(labels.map((label) => normalizeText(label.templateId)).filter(Boolean)))
+  const targetMaCocs = Array.from(new Set(labels.map((label) => normalizeText(label.maCoc)).filter(Boolean)))
+  if (!targetTemplateIds.length && !targetMaCocs.length) return sequenceBySerialId
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_code, production_date, created_at)'
+      'serial_id, serial_code, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_code, production_date, created_at)'
     )
     .in('production_lot.production_date', targetDates)
-    .in('loai_coc', targetLoaiCoc)
     .eq('is_active', true)
+
+  if (targetTemplateIds.length) {
+    query = query.in('template_id', targetTemplateIds)
+  } else {
+    query = query.in('ma_coc', targetMaCocs)
+  }
+
+  const { data, error } = await query
 
   if (error) throw error
 
@@ -274,7 +416,11 @@ async function buildDisplaySequenceBySerialId(
   for (const row of (data ?? []) as Array<Record<string, unknown>>) {
     const lot = (row.production_lot as Record<string, unknown> | null) || {}
     const key = [
-      normalizeText(row.loai_coc),
+      buildStockIdentityKey({
+        templateId: normalizeText(row.template_id),
+        maCoc: normalizeText(row.ma_coc),
+        loaiCoc: normalizeText(row.loai_coc),
+      }),
       deriveStockSegmentGroup(normalizeText(row.ten_doan)),
       String(round3(toNumber(row.chieu_dai_m))),
       normalizeText(lot.production_date),
@@ -382,6 +528,7 @@ export async function generateLotsAndSerialsFromWarehouseIssue(
   let generatedSerialCount = 0
 
   for (const item of activeItems) {
+    const templateIdentity = requireTemplateIdentity(item, 'Dòng xác nhận thực sản xuất')
     const lotPayload = {
       warehouse_issue_voucher_id: item.warehouseIssueVoucherId,
       plan_id: item.planId,
@@ -389,6 +536,8 @@ export async function generateLotsAndSerialsFromWarehouseIssue(
       order_id: item.orderId,
       boc_id: item.bocId,
       quote_id: item.quoteId,
+      template_id: templateIdentity.templateId || null,
+      ma_coc: templateIdentity.maCoc || null,
       loai_coc: item.loaiCoc,
       ten_doan: item.tenDoan,
       chieu_dai_m: round3(item.chieuDaiM),
@@ -458,6 +607,8 @@ export async function generateLotsAndSerialsFromWarehouseIssue(
       order_id: item.orderId,
       boc_id: item.bocId,
       quote_id: item.quoteId,
+      template_id: templateIdentity.templateId || null,
+      ma_coc: templateIdentity.maCoc || null,
       loai_coc: item.loaiCoc,
       ten_doan: item.tenDoan,
       chieu_dai_m: round3(item.chieuDaiM),
@@ -557,7 +708,7 @@ export async function loadPrintableSerialLabelsByPlan(
   const { data, error } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_code, production_date, plan_id, created_at)'
+      'serial_id, serial_code, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_id, lot_code, production_date, plan_id, created_at)'
     )
     .eq('production_lot.plan_id', planId)
     .eq('is_active', true)
@@ -572,6 +723,8 @@ export async function loadPrintableSerialLabelsByPlan(
       lotCode: normalizeText(lot.lot_code),
       serialId: String(row.serial_id || ''),
       serialCode: normalizeText(row.serial_code),
+      templateId: normalizeText(row.template_id),
+      maCoc: normalizeText(row.ma_coc),
       loaiCoc: normalizeText(row.loai_coc),
       tenDoan: normalizeText(row.ten_doan),
       chieuDaiM: round3(toNumber(row.chieu_dai_m)),
@@ -624,7 +777,7 @@ export async function loadPrintableSerialLabelsByLotIds(
 
   const { data, error } = await supabase
     .from('pile_serial')
-    .select('serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m')
+    .select('serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m')
     .in('lot_id', existingLotIds)
     .eq('is_active', true)
     .order('serial_code', { ascending: true })
@@ -638,6 +791,8 @@ export async function loadPrintableSerialLabelsByLotIds(
       lotCode: normalizeText(lot.lot_code),
       serialId: String(row.serial_id || ''),
       serialCode: normalizeText(row.serial_code),
+      templateId: normalizeText(row.template_id),
+      maCoc: normalizeText(row.ma_coc),
       loaiCoc: normalizeText(row.loai_coc),
       tenDoan: normalizeText(row.ten_doan),
       chieuDaiM: round3(toNumber(row.chieu_dai_m)),
@@ -669,7 +824,7 @@ export async function loadPrintableSerialLabelsBySerialCodes(
   const { data, error } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_id, lot_code, production_date, created_at)'
+      'serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_id, lot_code, production_date, created_at)'
     )
     .in('serial_code', normalizedCodes)
     .eq('is_active', true)
@@ -684,6 +839,8 @@ export async function loadPrintableSerialLabelsBySerialCodes(
       lotCode: normalizeText(lot.lot_code),
       serialId: String(row.serial_id || ''),
       serialCode: normalizeText(row.serial_code),
+      templateId: normalizeText(row.template_id),
+      maCoc: normalizeText(row.ma_coc),
       loaiCoc: normalizeText(row.loai_coc),
       tenDoan: normalizeText(row.ten_doan),
       chieuDaiM: round3(toNumber(row.chieu_dai_m)),
@@ -706,20 +863,25 @@ export async function loadSerialReprintSearchOptions(
   const schemaReady = await isPileSerialSchemaReady(supabase)
   if (!schemaReady) return { loaiCocOptions: [], tenDoanOptions: [] }
 
-  const { data, error } = await supabase
-    .from('pile_serial')
-    .select('loai_coc, ten_doan')
-    .eq('is_active', true)
-    .limit(3000)
+  const [templateRows, serialResponse] = await Promise.all([
+    loadTemplateRowsForCodeMap(supabase),
+    supabase.from('pile_serial').select('ten_doan').eq('is_active', true).limit(3000),
+  ])
 
-  if (error) throw error
+  if (serialResponse.error) throw serialResponse.error
+
+  const codeByTemplateId = buildTemplateDisplayCodeMap(templateRows)
 
   const loaiCocOptions = Array.from(
-    new Set(((data ?? []) as Array<Record<string, unknown>>).map((row) => normalizeText(row.loai_coc)).filter(Boolean))
+    new Set(
+      templateRows
+        .map((row) => codeByTemplateId.get(normalizeText(row.template_id || row.id)) || readNonUuidText(row.ma_coc, row.ma_coc_template))
+        .filter(Boolean)
+    )
   ).sort((a, b) => a.localeCompare(b, 'vi'))
   const tenDoanOptions = Array.from(
     new Set(
-      ((data ?? []) as Array<Record<string, unknown>>)
+      ((serialResponse.data ?? []) as Array<Record<string, unknown>>)
         .map((row) => deriveStockSegmentGroup(normalizeText(row.ten_doan)))
         .filter((item) => item === 'MUI' || item === 'THAN')
     )
@@ -744,15 +906,26 @@ export async function searchPrintableSerialLabelsForReprint(
 
   if (!normalizedLoaiCoc && !normalizedTenDoan && !normalizedDate && !length && !targetSequence) return []
 
+  const templateRows = normalizedLoaiCoc ? await loadTemplateRowsForCodeMap(supabase) : []
+  const codeByTemplateId = buildTemplateDisplayCodeMap(templateRows)
+  const matchedTemplates = normalizedLoaiCoc
+    ? templateRows.filter((row) => {
+        const templateId = normalizeText(row.template_id || row.id)
+        const generatedCode = codeByTemplateId.get(templateId) || readNonUuidText(row.ma_coc, row.ma_coc_template)
+        return generatedCode === normalizedLoaiCoc
+      })
+    : []
+  const matchedTemplateIds = matchedTemplates.map((row) => normalizeText(row.template_id || row.id)).filter(Boolean)
+  const matchedLoaiCoc = Array.from(new Set(matchedTemplates.map((row) => normalizeText(row.loai_coc)).filter(Boolean)))
+
   let query = supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_id, lot_code, production_date, created_at)'
+      'serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(lot_id, lot_code, production_date, created_at)'
     )
     .eq('is_active', true)
     .limit(500)
 
-  if (normalizedLoaiCoc) query = query.eq('loai_coc', normalizedLoaiCoc)
   if (normalizedDate) query = query.eq('production_lot.production_date', normalizedDate)
 
   const { data, error } = await query
@@ -766,6 +939,8 @@ export async function searchPrintableSerialLabelsForReprint(
         lotCode: normalizeText(lot.lot_code),
         serialId: String(row.serial_id || ''),
         serialCode: normalizeText(row.serial_code),
+        templateId: normalizeText(row.template_id),
+        maCoc: normalizeText(row.ma_coc),
         loaiCoc: normalizeText(row.loai_coc),
         tenDoan: normalizeText(row.ten_doan),
         chieuDaiM: round3(toNumber(row.chieu_dai_m)),
@@ -773,6 +948,13 @@ export async function searchPrintableSerialLabelsForReprint(
         createdAt: normalizeText(lot.created_at),
         displaySequence: 0,
       }
+    })
+    .filter((label) => {
+      if (!normalizedLoaiCoc) return true
+      if (label.maCoc === normalizedLoaiCoc) return true
+      if (matchedTemplateIds.includes(label.templateId || '')) return true
+      if (matchedLoaiCoc.includes(label.loaiCoc)) return true
+      return false
     })
     .filter((label) => !normalizedTenDoanGroup || deriveStockSegmentGroup(label.tenDoan) === normalizedTenDoanGroup)
     .filter((label) => !length || Math.abs(label.chieuDaiM - length) < 0.001)
@@ -801,6 +983,9 @@ export async function createOpeningBalanceLotAndSerials(
   }
 
   const normalizedLoaiCoc = normalizeText(input.loaiCoc)
+  const templateIdentity = requireTemplateIdentity(input, 'Phiếu mở tồn đầu kỳ')
+  const normalizedTemplateId = templateIdentity.templateId
+  const normalizedMaCoc = templateIdentity.maCoc
   const normalizedTenDoan = normalizeText(input.tenDoan)
   const normalizedDate = normalizeText(input.openingDate)
   const quantity = Math.max(Math.trunc(toNumber(input.quantity)), 0)
@@ -848,6 +1033,8 @@ export async function createOpeningBalanceLotAndSerials(
   const lotCode = buildLotCode(lotBaseCode, nextSeq)
   const lotPayload = {
     lot_code: lotCode,
+    template_id: normalizedTemplateId || null,
+    ma_coc: normalizedMaCoc || null,
     loai_coc: normalizedLoaiCoc,
     ten_doan: normalizedTenDoan,
     chieu_dai_m: round3(input.chieuDaiM),
@@ -870,6 +1057,8 @@ export async function createOpeningBalanceLotAndSerials(
   const serialRows = Array.from({ length: quantity }, (_, index) => ({
     serial_code: buildSerialCode(lotCode, index + 1),
     lot_id: lotId,
+    template_id: normalizedTemplateId || null,
+    ma_coc: normalizedMaCoc || null,
     loai_coc: normalizedLoaiCoc,
     ten_doan: normalizedTenDoan,
     chieu_dai_m: round3(input.chieuDaiM),
@@ -947,6 +1136,9 @@ export async function createDraftOpeningBalanceLotAndSerials(
   }
 
   const normalizedLoaiCoc = normalizeText(input.loaiCoc)
+  const templateIdentity = requireTemplateIdentity(input, 'Phiếu mở tồn đầu kỳ')
+  const normalizedTemplateId = templateIdentity.templateId
+  const normalizedMaCoc = templateIdentity.maCoc
   const normalizedTenDoan = normalizeText(input.tenDoan)
   const normalizedDate = normalizeText(input.openingDate)
   const normalizedNote = normalizeText(input.note)
@@ -1004,6 +1196,8 @@ export async function createDraftOpeningBalanceLotAndSerials(
     .from('production_lot')
     .insert({
       lot_code: lotCode,
+      template_id: normalizedTemplateId || null,
+      ma_coc: normalizedMaCoc || null,
       loai_coc: normalizedLoaiCoc,
       ten_doan: normalizedTenDoan,
       chieu_dai_m: round3(input.chieuDaiM),
@@ -1022,6 +1216,8 @@ export async function createDraftOpeningBalanceLotAndSerials(
   const serialRows = Array.from({ length: quantity }, (_, index) => ({
     serial_code: buildSerialCode(lotCode, index + 1),
     lot_id: lotId,
+    template_id: normalizedTemplateId || null,
+    ma_coc: normalizedMaCoc || null,
     loai_coc: normalizedLoaiCoc,
     ten_doan: normalizedTenDoan,
     chieu_dai_m: round3(input.chieuDaiM),
@@ -1087,6 +1283,8 @@ export async function createExternalPurchaseLotAndSerials(
   }
 
   const normalizedLoaiCoc = normalizeText(input.loaiCoc)
+  const normalizedTemplateId = normalizeText(input.templateId)
+  const normalizedMaCoc = normalizeText(input.maCoc)
   const normalizedTenDoan = normalizeText(input.tenDoan)
   const normalizedDate = normalizeText(input.receivedDate)
   const quantity = Math.max(Math.trunc(toNumber(input.quantity)), 0)
@@ -1125,6 +1323,8 @@ export async function createExternalPurchaseLotAndSerials(
     .from('production_lot')
     .insert({
       lot_code: lotCode,
+      template_id: normalizedTemplateId || null,
+      ma_coc: normalizedMaCoc || null,
       loai_coc: normalizedLoaiCoc,
       ten_doan: normalizedTenDoan,
       chieu_dai_m: round3(input.chieuDaiM),
@@ -1149,6 +1349,8 @@ export async function createExternalPurchaseLotAndSerials(
   const serialRows = Array.from({ length: quantity }, (_, index) => ({
     serial_code: buildSerialCode(lotCode, index + 1),
     lot_id: lotId,
+    template_id: normalizedTemplateId || null,
+    ma_coc: normalizedMaCoc || null,
     loai_coc: normalizedLoaiCoc,
     ten_doan: normalizedTenDoan,
     chieu_dai_m: round3(input.chieuDaiM),
@@ -1218,6 +1420,8 @@ export async function activateDraftOpeningBalanceLots(input: {
   openingDate: string
   lines: Array<{
     lineNo: number
+    templateId?: string | null
+    maCoc?: string | null
     loaiCoc: string
     tenDoan: string
     chieuDaiM: number
@@ -1333,7 +1537,7 @@ export async function loadOpeningBalanceLots(supabase: AnySupabase): Promise<Ope
 
   const { data: lotRows, error: lotError } = await supabase
     .from('production_lot')
-    .select('lot_id, lot_code, production_date, loai_coc, ten_doan, chieu_dai_m, actual_qty, created_at')
+    .select('lot_id, lot_code, production_date, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, actual_qty, created_at')
     .ilike('lot_code', 'ODK-%')
     .eq('is_active', true)
     .order('created_at', { ascending: false })
@@ -1430,6 +1634,8 @@ export async function loadOpeningBalanceLots(supabase: AnySupabase): Promise<Ope
       countSheetCode,
       countSheetStatus: countSheet?.countSheetStatus || '',
       openingDate: normalizeText(row.production_date),
+      templateId: normalizeText(row.template_id),
+      maCoc: normalizeText(row.ma_coc),
       loaiCoc: normalizeText(row.loai_coc),
       tenDoan: normalizeText(row.ten_doan),
       chieuDaiM: round3(toNumber(row.chieu_dai_m)),

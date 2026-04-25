@@ -26,6 +26,8 @@ create table if not exists public.ke_hoach_sx_line (
   ma_bao_gia text null,
   khach_hang text null,
   du_an text null,
+  template_id uuid null,
+  ma_coc text null,
   loai_coc text null,
   doan_key text not null,
   ten_doan text not null,
@@ -44,8 +46,13 @@ create table if not exists public.ke_hoach_sx_line (
   updated_by uuid null
 );
 
+alter table public.ke_hoach_sx_line add column if not exists template_id uuid null;
+alter table public.ke_hoach_sx_line add column if not exists ma_coc text null;
+
 create index if not exists ke_hoach_sx_line_plan_idx on public.ke_hoach_sx_line(plan_id);
 create index if not exists ke_hoach_sx_line_order_segment_idx on public.ke_hoach_sx_line(order_id, doan_key);
+create index if not exists ke_hoach_sx_line_template_idx on public.ke_hoach_sx_line(template_id);
+create index if not exists ke_hoach_sx_line_ma_coc_idx on public.ke_hoach_sx_line(ma_coc);
 
 alter table public.ke_hoach_sx_ngay enable row level security;
 alter table public.ke_hoach_sx_line enable row level security;
@@ -81,4 +88,3 @@ create policy ke_hoach_sx_line_update on public.ke_hoach_sx_line
 for update to authenticated
 using (is_active = true)
 with check (is_active = true);
-

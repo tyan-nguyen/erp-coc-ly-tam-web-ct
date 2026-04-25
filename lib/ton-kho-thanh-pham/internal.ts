@@ -11,6 +11,8 @@ export type InventorySerialRecord = {
   serialId: string
   serialCode: string
   lotId: string
+  templateId: string
+  maCoc: string
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -88,12 +90,19 @@ export function isMissingRelationError(error: unknown, relationName: string) {
   )
 }
 
-export function buildItemKey(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return [normalizeText(loaiCoc), deriveStockSegmentGroup(tenDoan), String(round3(chieuDaiM))].join('::')
+export function buildStockIdentityKey(input: { templateId?: string | null; maCoc?: string | null; loaiCoc: string }) {
+  return normalizeText(input.maCoc) || normalizeText(input.templateId) || normalizeText(input.loaiCoc)
 }
 
-export function buildItemLabel(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${normalizeText(loaiCoc)} | ${deriveStockSegmentGroup(tenDoan)} | ${round3(chieuDaiM)}m`
+export function buildItemKey(loaiCoc: string, tenDoan: string, chieuDaiM: number, identityKey?: string | null) {
+  return [normalizeText(identityKey) || normalizeText(loaiCoc), deriveStockSegmentGroup(tenDoan), String(round3(chieuDaiM))].join('::')
+}
+
+export function buildItemLabel(loaiCoc: string, tenDoan: string, chieuDaiM: number, maCoc?: string | null) {
+  const code = normalizeText(maCoc)
+  const baseLabel = normalizeText(loaiCoc)
+  const itemName = code || baseLabel
+  return `${itemName} | ${deriveStockSegmentGroup(tenDoan)} | ${round3(chieuDaiM)}m`
 }
 
 export function resolveVisibilityLabel(projectVisible: boolean, retailVisible: boolean) {
@@ -147,7 +156,7 @@ export function matchesScope(row: FinishedGoodsInventorySummaryRow, scope: Finis
 
 export function matchesQuery(row: FinishedGoodsInventorySummaryRow, query: string) {
   if (!query) return true
-  const haystack = normalizeSearch([row.itemLabel, row.loaiCoc, row.tenDoan, row.latestProductionDate].join(' '))
+  const haystack = normalizeSearch([row.itemLabel, row.maCoc, row.loaiCoc, row.tenDoan, row.latestProductionDate].join(' '))
   return haystack.includes(query)
 }
 

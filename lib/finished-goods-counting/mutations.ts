@@ -15,6 +15,8 @@ export type CreateFinishedGoodsCountSheetBody = {
     id?: string
     itemKey?: string
     itemLabel?: string
+    templateId?: string
+    maCoc?: string
     loaiCoc?: string
     tenDoan?: string
     chieuDaiM?: number
@@ -58,6 +60,8 @@ export async function executeCreateFinishedGoodsCountSheetMutation(input: {
           id: String(row.id || `fg-count-line-${index + 1}`),
           itemKey: String(row.itemKey || '').trim(),
           itemLabel: String(row.itemLabel || '').trim(),
+          templateId: String(row.templateId || '').trim(),
+          maCoc: String(row.maCoc || '').trim(),
           loaiCoc: String(row.loaiCoc || '').trim(),
           tenDoan: String(row.tenDoan || '').trim(),
           chieuDaiM: Number(row.chieuDaiM || 0),

@@ -42,6 +42,14 @@ export async function submitBocTachBulkDelete(ids: string[]) {
   return readApiEnvelope<unknown>(response, 'Không xóa được hồ sơ.')
 }
 
+export async function submitReopenBocTach(input: { bocId: string }) {
+  const response = await fetch(`/api/boc-tach/boc-tach-nvl/${input.bocId}/reopen`, {
+    method: 'POST',
+  })
+
+  return readApiEnvelope<{ reopenedFrom: string }>(response, 'Không mở lại được bóc tách.')
+}
+
 export async function fetchBocTachReferenceData() {
   const response = await fetch('/api/boc-tach/reference-data', {
     method: 'GET',

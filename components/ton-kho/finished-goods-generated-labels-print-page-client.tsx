@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useSyncExternalStore } from 'react'
 import { TemSerialPrintButton } from '@/components/san-xuat/tem-serial-print-button'
 import { AutoPrintOnMount } from '@/components/san-xuat/auto-print-on-mount'
 import type { PrintableSerialLabel } from '@/lib/pile-serial/repository'
@@ -11,21 +11,9 @@ type PrintableLabelWithQr = PrintableSerialLabel & {
 }
 
 function formatNumber(value: number) {
-  return new Intl.NumberFormat('vi-VN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 3,
-  }).format(Number(value || 0))
-}
-
-function formatDateLabel(value: string) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('vi-VN', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  }).format(date)
+  const rounded = Math.round(Number(value || 0) * 1000) / 1000
+  if (!Number.isFinite(rounded)) return '0'
+  return String(rounded)
 }
 
 function formatSequence(displaySequence: number, serialCode: string) {
@@ -38,6 +26,26 @@ function compactLabel(value: string) {
   return String(value || '').replace(/\s+/g, '')
 }
 
+function formatPileLabel(label: PrintableLabelWithQr) {
+  const maCoc = String(label.maCoc || '').trim()
+  const loaiCoc = String(label.loaiCoc || '').trim()
+  const itemName = maCoc || loaiCoc
+  return `${compactLabel(itemName)} | ${label.tenDoan} ${formatNumber(label.chieuDaiM)}m`
+}
+
+function subscribeHydration(onStoreChange: () => void) {
+  const timeoutId = window.setTimeout(onStoreChange, 0)
+  return () => window.clearTimeout(timeoutId)
+}
+
+function getClientSnapshot() {
+  return true
+}
+
+function getServerSnapshot() {
+  return false
+}
+
 export function FinishedGoodsGeneratedLabelsPrintPageClient({
   labels,
   autoPrint = false,
@@ -46,6 +54,7 @@ export function FinishedGoodsGeneratedLabelsPrintPageClient({
   autoPrint?: boolean
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => labels.map((label) => label.serialId))
+  const hydrated = useSyncExternalStore(subscribeHydration, getClientSnapshot, getServerSnapshot)
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
@@ -159,9 +168,13 @@ export function FinishedGoodsGeneratedLabelsPrintPageClient({
                   />
                 </div>
 
-                <div className="mt-auto border-t pt-1.5 text-center text-[10px] font-semibold leading-tight print:text-[9px]">
-                  {compactLabel(label.loaiCoc)} | {label.tenDoan} {formatNumber(label.chieuDaiM)}m | {formatDateLabel(label.productionDate)} | #
-                  {formatSequence(label.displaySequence, label.serialCode)}
+                <div
+                  className="mt-auto min-h-[1.05rem] border-t pt-1.5 text-center text-[10px] font-semibold leading-tight print:text-[9px]"
+                  suppressHydrationWarning
+                >
+                  {hydrated
+                    ? `${formatPileLabel(label)} | #${formatSequence(label.displaySequence, label.serialCode)}`
+                    : ''}
                 </div>
               </div>
             </article>

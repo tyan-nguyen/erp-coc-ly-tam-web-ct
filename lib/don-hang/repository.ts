@@ -411,6 +411,50 @@ export function filterTransitionsByRole(
   )
 }
 
+function normalizeStateKey(value: string | null | undefined) {
+  return String(value || '').trim().toUpperCase()
+}
+
+function isBackwardOrderTransition(detail: DonHangDetail, toState: string) {
+  const target = normalizeStateKey(toState)
+  const current = normalizeStateKey(detail.order.trang_thai)
+  if (!target || target === current) return false
+
+  const seenStates = new Set<string>()
+  for (const row of detail.timeline) {
+    if (row.from_state) seenStates.add(normalizeStateKey(row.from_state))
+    if (row.to_state) seenStates.add(normalizeStateKey(row.to_state))
+  }
+
+  return seenStates.has(target)
+}
+
+async function hasOrderDownstreamRecords(supabase: AnySupabase, orderId: string) {
+  const [
+    { count: planCount, error: planError },
+    { count: shipmentCount, error: shipmentError },
+  ] = await Promise.all([
+    supabase
+      .from('ke_hoach_sx_line')
+      .select('line_id', { count: 'exact', head: true })
+      .eq('order_id', orderId)
+      .eq('is_active', true),
+    supabase
+      .from('phieu_xuat_ban')
+      .select('voucher_id', { count: 'exact', head: true })
+      .eq('order_id', orderId)
+      .eq('is_active', true),
+  ])
+
+  if (planError) throw planError
+  if (shipmentError) throw shipmentError
+
+  return {
+    hasProductionPlan: Number(planCount || 0) > 0,
+    hasShipmentVoucher: Number(shipmentCount || 0) > 0,
+  }
+}
+
 export async function loadActorDisplayMap(
   supabase: AnySupabase,
   timeline: DonHangTimelineRow[]
@@ -453,6 +497,16 @@ export async function transitionDonHang(
 
   if (!matchedTransition) {
     throw new Error('Ban khong co quyen hoac transition khong hop le')
+  }
+
+  if (isBackwardOrderTransition(detail, params.toState)) {
+    const downstream = await hasOrderDownstreamRecords(supabase, params.orderId)
+    if (downstream.hasShipmentVoucher) {
+      throw new Error('Đơn hàng đã có phiếu xuất. Cần mở ngược phiếu xuất trước khi chuyển lùi trạng thái.')
+    }
+    if (downstream.hasProductionPlan) {
+      throw new Error('Đơn hàng đã lên kế hoạch sản xuất. Cần mở ngược kế hoạch trước khi chuyển lùi trạng thái.')
+    }
   }
 
   const payload: Record<string, unknown> = {

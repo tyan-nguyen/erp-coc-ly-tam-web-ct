@@ -232,11 +232,9 @@ export function PileTemplateLookupForm({
 
   return (
     <form className="space-y-6" onSubmit={handleSubmit}>
-      <div>
+      <section>
         <h2 className="text-lg font-semibold">Thông số cọc</h2>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Field label="Loại cọc">
           <select
             value={selectedTemplateId}
@@ -373,15 +371,12 @@ export function PileTemplateLookupForm({
             className="app-input w-full rounded-xl px-3 py-3 text-sm"
           />
         </Field>
-      </div>
+        </div>
+      </section>
 
-      <div className="border-t pt-6" style={{ borderColor: 'var(--color-border)' }}>
+      <section className="border-t pt-6" style={{ borderColor: 'var(--color-border)' }}>
         <div>
           <h2 className="text-lg font-semibold">Phụ kiện</h2>
-          <p className="app-muted mt-2 text-sm">
-            Tùy chọn. Nếu biết đúng phụ kiện đi kèm thì chọn thêm để kết quả khớp sát hơn. Không nhập vẫn tra cứu được
-            bình thường.
-          </p>
         </div>
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <AccessoryField label="Mặt bích" value={formValues.matBich} onChange={(value) => updateField('matBich', value)} options={accessoryGroups.matBich} />
@@ -389,9 +384,9 @@ export function PileTemplateLookupForm({
           <AccessoryField label="Mũi cọc" value={formValues.muiCoc} onChange={(value) => updateField('muiCoc', value)} options={accessoryGroups.muiCoc} />
           <AccessoryField label="Táp vuông" value={formValues.tap} onChange={(value) => updateField('tap', value)} options={accessoryGroups.tap} />
         </div>
-      </div>
+      </section>
 
-      <div className="flex flex-wrap items-end gap-3">
+      <div className="flex flex-wrap items-end gap-3 border-t pt-6" style={{ borderColor: 'var(--color-border)' }}>
         <button
           type="submit"
           disabled={showPending}

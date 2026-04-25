@@ -4,6 +4,7 @@ import {
   buildInventoryFilters,
   buildItemKey,
   buildItemLabel,
+  buildStockIdentityKey,
   deriveInventoryVisibility,
   isCurrentInventoryRow,
   isMissingRelationError,
@@ -25,6 +26,7 @@ import {
 
 const FINISHED_GOODS_STOCK_MODEL_NAME = 'finished_goods_stock_summary'
 const ENABLE_FINISHED_GOODS_STOCK_READ_MODEL = process.env.FINISHED_GOODS_STOCK_READ_MODEL === 'true'
+const UUID_TEXT_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 async function isInventorySchemaReady(supabase: AnySupabase) {
   const { error } = await supabase.from('pile_serial').select('serial_id').limit(1)
@@ -96,11 +98,70 @@ function formatFinishedGoodsSerialNote(note: string, countSheetCodeMap: Map<stri
   return `Kiểm kê cọc ${countSheetCode} - dòng ${parsed.lineNo}`
 }
 
+function isUuidText(value: unknown) {
+  return UUID_TEXT_PATTERN.test(normalizeText(value))
+}
+
+function readNonUuidText(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeText(value)
+    if (normalized && !isUuidText(normalized)) return normalized
+  }
+  return ''
+}
+
+async function loadTemplateCodeMapByIds(supabase: AnySupabase, templateIds: string[]) {
+  const uniqueTemplateIds = Array.from(new Set(templateIds.map(normalizeText).filter(Boolean)))
+  const codeByTemplateId = new Map<string, string>()
+  if (!uniqueTemplateIds.length) return codeByTemplateId
+
+  const { data, error } = await supabase
+    .from('dm_coc_template')
+    .select('*')
+    .in('template_id', uniqueTemplateIds)
+
+  if (error) {
+    if (isMissingRelationError(error, 'dm_coc_template')) return codeByTemplateId
+    throw error
+  }
+
+  for (const row of safeArray<Record<string, unknown>>(data)) {
+    const templateId = normalizeText(row.template_id)
+    const maCoc = readNonUuidText(row.ma_coc, row.ma_coc_template)
+    if (templateId && maCoc) codeByTemplateId.set(templateId, maCoc)
+  }
+
+  return codeByTemplateId
+}
+
+function extractTemplateSteelGrade(row: Record<string, unknown>) {
+  const explicit = normalizeText(row.mac_thep).toUpperCase()
+  if (explicit) return explicit
+  const match = normalizeText(row.loai_coc).toUpperCase().match(/-\s*([ABC])\d+/)
+  return match?.[1] || ''
+}
+
+function extractTemplateDiameter(row: Record<string, unknown>) {
+  const explicit = normalizeText(row.do_ngoai)
+  if (explicit) return explicit
+  const match = normalizeText(row.loai_coc).toUpperCase().match(/[ABC](\d+)/)
+  return match?.[1] || ''
+}
+
+function buildTemplateCodePrefix(row: Record<string, unknown>) {
+  const macBeTong = normalizeText(row.mac_be_tong).toUpperCase().replace(/^M/, '')
+  const steelGrade = extractTemplateSteelGrade(row)
+  const diameter = extractTemplateDiameter(row)
+  const thickness = normalizeText(row.chieu_day)
+  if (!macBeTong || !steelGrade || !diameter || !thickness) return ''
+  return `M${macBeTong} - ${steelGrade}${diameter} - ${thickness}`
+}
+
 async function loadCurrentInventorySerials(supabase: AnySupabase) {
   const { data: serialRows, error: serialError } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes'
+      'serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes'
     )
     .eq('is_active', true)
 
@@ -129,6 +190,12 @@ async function loadCurrentInventorySerials(supabase: AnySupabase) {
     supabase,
     currentRows.map((row) => normalizeText(row.notes))
   )
+  const templateCodeById = await loadTemplateCodeMapByIds(
+    supabase,
+    currentRows
+      .filter((row) => !readNonUuidText(row.ma_coc))
+      .map((row) => normalizeText(row.template_id))
+  )
 
   const lotMap = new Map<string, Record<string, unknown>>()
   for (const lot of (lotResponse.data ?? []) as Array<Record<string, unknown>>) {
@@ -144,6 +211,8 @@ async function loadCurrentInventorySerials(supabase: AnySupabase) {
     const lot = lotMap.get(String(row.lot_id || '')) || {}
     const location = locationMap.get(String(row.current_location_id || '')) || {}
     const loaiCoc = normalizeText(row.loai_coc)
+    const templateId = normalizeText(row.template_id)
+    const maCoc = readNonUuidText(row.ma_coc, templateCodeById.get(templateId))
     const tenDoan = normalizeText(row.ten_doan)
     const chieuDaiM = round3(toNumber(row.chieu_dai_m))
     const qcStatus = normalizeText(row.qc_status)
@@ -155,10 +224,13 @@ async function loadCurrentInventorySerials(supabase: AnySupabase) {
       Boolean(row.visible_in_retail)
     )
 
+    const identityKey = buildStockIdentityKey({ templateId, maCoc, loaiCoc })
     return {
       serialId: String(row.serial_id || ''),
       serialCode: normalizeText(row.serial_code),
       lotId: String(row.lot_id || ''),
+      templateId,
+      maCoc,
       loaiCoc,
       tenDoan,
       chieuDaiM,
@@ -172,8 +244,8 @@ async function loadCurrentInventorySerials(supabase: AnySupabase) {
       productionDate: normalizeText(lot.production_date),
       lotCode: normalizeText(lot.lot_code),
       locationLabel: normalizeText(location.location_name) || normalizeText(location.location_code) || 'Chưa gán',
-      itemKey: buildItemKey(loaiCoc, tenDoan, chieuDaiM),
-      itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+      itemKey: buildItemKey(loaiCoc, tenDoan, chieuDaiM, identityKey),
+      itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, maCoc),
     } satisfies InventorySerialRecord
   })
 }
@@ -197,11 +269,21 @@ async function buildFinishedGoodsLegacySummaryRows(supabase: AnySupabase) {
 
 function mapFinishedGoodsSummaryRow(row: Record<string, unknown>): FinishedGoodsInventorySummaryRow {
   const loaiCoc = normalizeText(row.loai_coc)
+  const templateId = normalizeText(row.template_id)
+  const maCoc = normalizeText(row.ma_coc)
   const tenDoan = normalizeText(row.ten_doan)
   const chieuDaiM = round3(toNumber(row.chieu_dai_m))
+  const identityKey = buildStockIdentityKey({ templateId, maCoc, loaiCoc })
+  const storedLabel = normalizeText(row.item_label)
+  const itemLabel = maCoc && !isUuidText(maCoc) && !storedLabel.includes(maCoc)
+    ? buildItemLabel(loaiCoc, tenDoan, chieuDaiM, maCoc)
+    : storedLabel || buildItemLabel(loaiCoc, tenDoan, chieuDaiM, maCoc)
+
   return {
-    itemKey: normalizeText(row.item_key) || buildItemKey(loaiCoc, tenDoan, chieuDaiM),
-    itemLabel: normalizeText(row.item_label) || buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+    itemKey: normalizeText(row.item_key) || buildItemKey(loaiCoc, tenDoan, chieuDaiM, identityKey),
+    itemLabel,
+    templateId,
+    maCoc,
     loaiCoc,
     tenDoan,
     chieuDaiM,
@@ -219,7 +301,7 @@ async function loadFinishedGoodsReadModelRows(supabase: AnySupabase) {
   const { data, error } = await supabase
     .from('finished_goods_stock_summary')
     .select(
-      'item_key, item_label, loai_coc, ten_doan, chieu_dai_m, physical_qty, project_qty, retail_qty, hold_qty, lot_count, latest_production_date, legacy_shipment_gap_qty'
+      'item_key, item_label, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, physical_qty, project_qty, retail_qty, hold_qty, lot_count, latest_production_date, legacy_shipment_gap_qty'
     )
     .order('physical_qty', { ascending: false })
     .order('item_label', { ascending: true })
@@ -236,7 +318,7 @@ async function loadFinishedGoodsReadModelRow(supabase: AnySupabase, itemKey: str
   const { data, error } = await supabase
     .from('finished_goods_stock_summary')
     .select(
-      'item_key, item_label, loai_coc, ten_doan, chieu_dai_m, physical_qty, project_qty, retail_qty, hold_qty, lot_count, latest_production_date, legacy_shipment_gap_qty'
+      'item_key, item_label, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, physical_qty, project_qty, retail_qty, hold_qty, lot_count, latest_production_date, legacy_shipment_gap_qty'
     )
     .eq('item_key', itemKey)
     .maybeSingle()
@@ -265,20 +347,30 @@ async function loadCurrentInventorySerialsForItem(supabase: AnySupabase, itemKey
   const { data: serialRows, error: serialError } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes'
+      'serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes'
     )
     .eq('is_active', true)
-    .eq('loai_coc', parsed.loaiCoc)
     .eq('chieu_dai_m', parsed.chieuDaiM)
 
   if (serialError) throw serialError
 
-  const currentRows = safeArray<Record<string, unknown>>(serialRows).filter((row) => {
+  const serialRowsArray = safeArray<Record<string, unknown>>(serialRows)
+  const templateCodeById = await loadTemplateCodeMapByIds(
+    supabase,
+    serialRowsArray
+      .filter((row) => !readNonUuidText(row.ma_coc))
+      .map((row) => normalizeText(row.template_id))
+  )
+
+  const currentRows = serialRowsArray.filter((row) => {
     const lifecycleStatus = normalizeText(row.lifecycle_status)
     const loaiCoc = normalizeText(row.loai_coc)
+    const templateId = normalizeText(row.template_id)
+    const maCoc = readNonUuidText(row.ma_coc, templateCodeById.get(templateId))
     const tenDoan = normalizeText(row.ten_doan)
     const chieuDaiM = round3(toNumber(row.chieu_dai_m))
-    return isCurrentInventoryRow(lifecycleStatus) && buildItemKey(loaiCoc, tenDoan, chieuDaiM) === itemKey
+    const identityKey = buildStockIdentityKey({ templateId, maCoc, loaiCoc })
+    return isCurrentInventoryRow(lifecycleStatus) && buildItemKey(loaiCoc, tenDoan, chieuDaiM, identityKey) === itemKey
   })
 
   const lotIds = Array.from(new Set(currentRows.map((row) => String(row.lot_id || '')).filter(Boolean)))
@@ -315,6 +407,8 @@ async function loadCurrentInventorySerialsForItem(supabase: AnySupabase, itemKey
     const lot = lotMap.get(String(row.lot_id || '')) || {}
     const location = locationMap.get(String(row.current_location_id || '')) || {}
     const loaiCoc = normalizeText(row.loai_coc)
+    const templateId = normalizeText(row.template_id)
+    const maCoc = readNonUuidText(row.ma_coc, templateCodeById.get(templateId))
     const tenDoan = normalizeText(row.ten_doan)
     const chieuDaiM = round3(toNumber(row.chieu_dai_m))
     const qcStatus = normalizeText(row.qc_status)
@@ -326,10 +420,13 @@ async function loadCurrentInventorySerialsForItem(supabase: AnySupabase, itemKey
       Boolean(row.visible_in_retail)
     )
 
+    const identityKey = buildStockIdentityKey({ templateId, maCoc, loaiCoc })
     return {
       serialId: String(row.serial_id || ''),
       serialCode: normalizeText(row.serial_code),
       lotId: String(row.lot_id || ''),
+      templateId,
+      maCoc,
       loaiCoc,
       tenDoan,
       chieuDaiM,
@@ -343,8 +440,8 @@ async function loadCurrentInventorySerialsForItem(supabase: AnySupabase, itemKey
       productionDate: normalizeText(lot.production_date),
       lotCode: normalizeText(lot.lot_code),
       locationLabel: normalizeText(location.location_name) || normalizeText(location.location_code) || 'Chưa gán',
-      itemKey: buildItemKey(loaiCoc, tenDoan, chieuDaiM),
-      itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+      itemKey: buildItemKey(loaiCoc, tenDoan, chieuDaiM, identityKey),
+      itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, maCoc),
     } satisfies InventorySerialRecord
   })
 }
@@ -402,6 +499,8 @@ export async function refreshFinishedGoodsStockReadModel(supabase: SupabaseClien
       rows.map((row) => ({
         item_key: row.itemKey,
         item_label: row.itemLabel,
+        template_id: row.templateId || null,
+        ma_coc: row.maCoc || null,
         loai_coc: row.loaiCoc,
         ten_doan: row.tenDoan,
         chieu_dai_m: row.chieuDaiM,
@@ -457,6 +556,163 @@ export async function verifyFinishedGoodsStockReadModel(supabase: SupabaseClient
     sourceRowCount: sourceRows.length,
     readModelRowCount: readModelRows.length,
     ...comparison,
+  }
+}
+
+export async function repairFinishedGoodsTemplateCodeMapping(supabase: SupabaseClient) {
+  const { data, error } = await supabase.from('dm_coc_template').select('*').eq('is_active', true).limit(1000)
+  if (error) throw error
+
+  const templateRows = safeArray<Record<string, unknown>>(data)
+  const sortedTemplateRows = [...templateRows].sort((a, b) => {
+    const aTime = new Date(normalizeText(a.created_at)).getTime() || 0
+    const bTime = new Date(normalizeText(b.created_at)).getTime() || 0
+    if (aTime !== bTime) return aTime - bTime
+    return normalizeText(a.template_id).localeCompare(normalizeText(b.template_id), 'vi')
+  })
+
+  const prefixCounts = new Map<string, number>()
+  const codeByTemplateId = new Map<string, string>()
+
+  for (const row of sortedTemplateRows) {
+    const templateId = normalizeText(row.template_id)
+    const prefix = buildTemplateCodePrefix(row)
+    if (!templateId || !prefix) continue
+
+    const next = (prefixCounts.get(prefix) ?? 0) + 1
+    prefixCounts.set(prefix, next)
+
+    const explicitCode = readNonUuidText(row.ma_coc)
+    const code = explicitCode.startsWith(`${prefix} - `) ? explicitCode : `${prefix} - ${next}`
+    codeByTemplateId.set(templateId, code)
+  }
+
+  let templateUpdatedCount = 0
+  let templateMatchedProductionLotUpdatedCount = 0
+  let templateMatchedSerialUpdatedCount = 0
+  for (const row of sortedTemplateRows) {
+    const templateId = normalizeText(row.template_id)
+    const code = codeByTemplateId.get(templateId)
+    if (!templateId || !code) continue
+
+    const update = await supabase.from('dm_coc_template').update({ ma_coc: code }).eq('template_id', templateId)
+    if (update.error) throw update.error
+
+    const legacyCodeUpdate = await supabase
+      .from('dm_coc_template')
+      .update({ ma_coc_template: code })
+      .eq('template_id', templateId)
+    if (legacyCodeUpdate.error && !String(legacyCodeUpdate.error.message || '').includes('ma_coc_template')) {
+      throw legacyCodeUpdate.error
+    }
+
+    templateUpdatedCount += 1
+  }
+
+  for (const [templateId, maCoc] of codeByTemplateId.entries()) {
+    const lotUpdate = await supabase
+      .from('production_lot')
+      .update({ ma_coc: maCoc })
+      .eq('template_id', templateId)
+
+    if (lotUpdate.error) {
+      if (!isMissingRelationError(lotUpdate.error, 'production_lot')) throw lotUpdate.error
+    } else {
+      templateMatchedProductionLotUpdatedCount += 1
+    }
+
+    const serialUpdate = await supabase
+      .from('pile_serial')
+      .update({ ma_coc: maCoc })
+      .eq('template_id', templateId)
+
+    if (serialUpdate.error) throw serialUpdate.error
+    templateMatchedSerialUpdatedCount += 1
+  }
+
+  return {
+    templateRowCount: templateRows.length,
+    generatedCodeCount: codeByTemplateId.size,
+    uniqueLoaiCocCount: 0,
+    ambiguousLoaiCocCount: 0,
+    templateUpdatedCount,
+    templateMatchedProductionLotUpdatedCount,
+    templateMatchedSerialUpdatedCount,
+    productionLotUpdatedCount: 0,
+    serialUpdatedCount: 0,
+    sampleCodes: Array.from(codeByTemplateId.entries())
+      .slice(0, 10)
+      .map(([templateId, maCoc]) => ({ templateId, maCoc })),
+  }
+}
+
+export async function loadFinishedGoodsCodeMappingDiagnostics(supabase: SupabaseClient) {
+  const [serialResponse, readModelResponse] = await Promise.all([
+    supabase
+      .from('pile_serial')
+      .select('serial_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, lifecycle_status')
+      .eq('is_active', true),
+    supabase
+      .from('finished_goods_stock_summary')
+      .select('item_key, item_label, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, physical_qty'),
+  ])
+
+  if (serialResponse.error) throw serialResponse.error
+  if (readModelResponse.error) throw readModelResponse.error
+
+  const serialRows = safeArray<Record<string, unknown>>(serialResponse.data)
+  const readModelRows = safeArray<Record<string, unknown>>(readModelResponse.data)
+
+  const currentSerialRows = serialRows.filter((row) => isCurrentInventoryRow(normalizeText(row.lifecycle_status)))
+  const missingSerialRows = currentSerialRows.filter((row) => !normalizeText(row.ma_coc))
+  const uuidSerialRows = currentSerialRows.filter((row) => isUuidText(row.ma_coc))
+  const uuidReadModelRows = readModelRows.filter((row) => isUuidText(row.ma_coc))
+  const readModelRowsWithoutCodeLabel = readModelRows.filter((row) => {
+    const maCoc = normalizeText(row.ma_coc)
+    if (!maCoc || isUuidText(maCoc)) return true
+    return !normalizeText(row.item_label).includes(maCoc)
+  })
+
+  const summarizeRows = (rows: Array<Record<string, unknown>>) =>
+    rows.slice(0, 10).map((row) => ({
+      maCoc: normalizeText(row.ma_coc) || null,
+      templateId: normalizeText(row.template_id) || null,
+      loaiCoc: normalizeText(row.loai_coc),
+      tenDoan: normalizeText(row.ten_doan),
+      chieuDaiM: round3(toNumber(row.chieu_dai_m)),
+    }))
+
+  return {
+    ready:
+      missingSerialRows.length === 0 &&
+      uuidSerialRows.length === 0 &&
+      uuidReadModelRows.length === 0 &&
+      readModelRowsWithoutCodeLabel.length === 0,
+    serial: {
+      currentRowCount: currentSerialRows.length,
+      withMaCocCount: currentSerialRows.filter((row) => normalizeText(row.ma_coc) && !isUuidText(row.ma_coc)).length,
+      missingMaCocCount: missingSerialRows.length,
+      uuidMaCocCount: uuidSerialRows.length,
+      sampleMissing: summarizeRows(missingSerialRows),
+      sampleUuid: summarizeRows(uuidSerialRows),
+    },
+    readModel: {
+      rowCount: readModelRows.length,
+      withMaCocCount: readModelRows.filter((row) => normalizeText(row.ma_coc) && !isUuidText(row.ma_coc)).length,
+      uuidMaCocCount: uuidReadModelRows.length,
+      labelMissingMaCocCount: readModelRowsWithoutCodeLabel.length,
+      sampleLabels: readModelRows.slice(0, 10).map((row) => ({
+        label: normalizeText(row.item_label),
+        maCoc: normalizeText(row.ma_coc) || null,
+        loaiCoc: normalizeText(row.loai_coc),
+        physicalQty: toNumber(row.physical_qty),
+      })),
+      sampleMissingLabels: readModelRowsWithoutCodeLabel.slice(0, 10).map((row) => ({
+        label: normalizeText(row.item_label),
+        maCoc: normalizeText(row.ma_coc) || null,
+        loaiCoc: normalizeText(row.loai_coc),
+      })),
+    },
   }
 }
 
@@ -516,14 +772,32 @@ async function loadLegacyShipmentGapByItem(supabase: AnySupabase) {
   if (relatedSerialIds.length) {
     const { data: serialRows, error: serialError } = await supabase
       .from('pile_serial')
-      .select('serial_id, loai_coc, ten_doan, chieu_dai_m')
+      .select('serial_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m')
       .in('serial_id', relatedSerialIds)
 
     if (serialError) throw serialError
-    for (const row of safeArray<Record<string, unknown>>(serialRows)) {
+    const rows = safeArray<Record<string, unknown>>(serialRows)
+    const templateCodeById = await loadTemplateCodeMapByIds(
+      supabase,
+      rows
+        .filter((row) => !readNonUuidText(row.ma_coc))
+        .map((row) => normalizeText(row.template_id))
+    )
+    for (const row of rows) {
+      const templateId = normalizeText(row.template_id)
+      const maCoc = readNonUuidText(row.ma_coc, templateCodeById.get(templateId))
       serialItemKeyMap.set(
         String(row.serial_id || ''),
-        buildItemKey(normalizeText(row.loai_coc), normalizeText(row.ten_doan), round3(toNumber(row.chieu_dai_m)))
+        buildItemKey(
+          normalizeText(row.loai_coc),
+          normalizeText(row.ten_doan),
+          round3(toNumber(row.chieu_dai_m)),
+          buildStockIdentityKey({
+            templateId,
+            maCoc,
+            loaiCoc: normalizeText(row.loai_coc),
+          })
+        )
       )
     }
   }
@@ -555,7 +829,16 @@ async function loadLegacyShipmentGapByItem(supabase: AnySupabase) {
     for (const line of lines) {
       const actualQty = Math.max(toNumber(line.actualQty), 0)
       if (!actualQty) continue
-      const itemKey = buildItemKey(normalizeText(line.loaiCoc), normalizeText(line.tenDoan), round3(toNumber(line.chieuDaiM)))
+      const itemKey = buildItemKey(
+        normalizeText(line.loaiCoc),
+        normalizeText(line.tenDoan),
+        round3(toNumber(line.chieuDaiM)),
+        buildStockIdentityKey({
+          templateId: normalizeText(line.templateId),
+          maCoc: normalizeText(line.maCoc),
+          loaiCoc: normalizeText(line.loaiCoc),
+        })
+      )
       const assigned = assignedByVoucherAndItem.get(`${voucherId}::${itemKey}`) ?? 0
       const returned = returnedByVoucherAndItem.get(`${voucherId}::${itemKey}`) ?? 0
       const gap = Math.max(actualQty - assigned - returned, 0)

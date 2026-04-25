@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadPileTemplateDetailByLoaiCoc } from '@/lib/pile-template-lookup/repository'
+import { loadPileTemplateDetailByIdentity } from '@/lib/pile-template-lookup/repository'
 import { loadFinishedGoodsCurrentInventoryRows } from '@/lib/ton-kho-thanh-pham/repository'
 import type { WarehouseInternalSerialLookupData } from '@/lib/ton-kho-thanh-pham/internal-serial-scan-types'
 import {
+  buildStockIdentityKey,
   buildItemKey,
   buildItemLabel,
   buildLocationLabel,
@@ -48,7 +49,7 @@ export async function loadWarehouseInternalSerialLookup(
   const { data, error } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, lot_id, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes, is_active'
+      'serial_id, serial_code, lot_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, lifecycle_status, disposition_status, visible_in_project, visible_in_retail, current_location_id, notes, is_active'
     )
     .eq('serial_code', normalizedSerialCode)
     .limit(1)
@@ -62,6 +63,8 @@ export async function loadWarehouseInternalSerialLookup(
   const lotId = String(data.lot_id || '')
   const currentLocationId = String(data.current_location_id || '')
   const loaiCoc = normalizeText(data.loai_coc)
+  const templateId = normalizeText(data.template_id)
+  const maCoc = normalizeText(data.ma_coc)
   const [lotResponse, locationResponse, currentInventoryRows, templateDetail] = await Promise.all([
     lotId
       ? supabase.from('production_lot').select('lot_id, lot_code, production_date').eq('lot_id', lotId).maybeSingle()
@@ -74,7 +77,7 @@ export async function loadWarehouseInternalSerialLookup(
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     loadFinishedGoodsCurrentInventoryRows(supabase),
-    loadPileTemplateDetailByLoaiCoc(supabase, loaiCoc),
+    loadPileTemplateDetailByIdentity(supabase, { templateId, maCoc, loaiCoc }),
   ])
 
   if (lotResponse.error) throw lotResponse.error
@@ -82,7 +85,8 @@ export async function loadWarehouseInternalSerialLookup(
 
   const tenDoan = normalizeText(data.ten_doan)
   const chieuDaiM = round3(toNumber(data.chieu_dai_m))
-  const itemKey = buildItemKey(loaiCoc, tenDoan, chieuDaiM)
+  const identityKey = buildStockIdentityKey({ templateId, maCoc, loaiCoc })
+  const itemKey = buildItemKey(loaiCoc, tenDoan, chieuDaiM, identityKey)
   const currentItemRows = currentInventoryRows.filter((row) => row.itemKey === itemKey)
   const currentSerialRow = currentItemRows.find((row) => row.serialId === String(data.serial_id || ''))
 
@@ -111,7 +115,7 @@ export async function loadWarehouseInternalSerialLookup(
     serialId: String(data.serial_id || ''),
     serialCode: normalizeText(data.serial_code),
     itemKey,
-    itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+    itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, maCoc),
     loaiCoc,
     tenDoan,
     chieuDaiM,

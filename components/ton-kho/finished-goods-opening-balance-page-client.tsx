@@ -72,6 +72,8 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
   }, [])
 
   const [openingDate, setOpeningDate] = useState(today)
+  const [templateId, setTemplateId] = useState('')
+  const [maCoc, setMaCoc] = useState('')
   const [loaiCoc, setLoaiCoc] = useState('')
   const [tenDoan, setTenDoan] = useState('')
   const [chieuDaiM, setChieuDaiM] = useState('')
@@ -89,6 +91,8 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
     try {
       const parsed = JSON.parse(draft) as {
         openingDate?: string
+        templateId?: string
+        maCoc?: string
         loaiCoc?: string
         tenDoan?: string
         chieuDaiM?: string
@@ -98,6 +102,8 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
         note?: string
       }
       setOpeningDate(parsed.openingDate || today)
+      setTemplateId(parsed.templateId || '')
+      setMaCoc(parsed.maCoc || '')
       setLoaiCoc(parsed.loaiCoc || '')
       setTenDoan(parsed.tenDoan || '')
       setChieuDaiM(parsed.chieuDaiM || '')
@@ -114,12 +120,17 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
   useEffect(() => {
     const selectedLoaiCoc = searchParams.get('selected_loai_coc')
     if (!selectedLoaiCoc) return
-    setLoaiCoc(selectedLoaiCoc)
+    const selectedOption = props.pageData.loaiCocOptions.find(
+      (option) => option.templateId === selectedLoaiCoc || option.maCoc === selectedLoaiCoc || option.loaiCoc === selectedLoaiCoc
+    )
+    setTemplateId(selectedOption?.templateId || '')
+    setMaCoc(selectedOption?.maCoc || '')
+    setLoaiCoc(selectedOption?.loaiCoc || selectedLoaiCoc)
     const nextParams = new URLSearchParams(searchParamsString)
     nextParams.delete('selected_loai_coc')
     const nextQuery = nextParams.toString()
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false })
-  }, [pathname, router, searchParams, searchParamsString])
+  }, [pathname, props.pageData.loaiCocOptions, router, searchParams, searchParamsString])
 
   function handleOpenLookup() {
     const returnTo = searchParamsString ? `${pathname}?${searchParamsString}` : pathname
@@ -127,6 +138,8 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
       OPENING_BALANCE_LOOKUP_DRAFT_KEY,
       JSON.stringify({
         openingDate,
+        templateId,
+        maCoc,
         loaiCoc,
         tenDoan,
         chieuDaiM,
@@ -166,7 +179,7 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
     }
 
     if (!loaiCoc.trim()) {
-      setMessage('Cần chọn loại cọc.')
+      setMessage('Cần chọn mã cọc.')
       return
     }
 
@@ -195,8 +208,10 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
         rows: [
           {
             id: `opening-${loaiCoc}-${tenDoan}-${chieuDaiM}`,
-            itemKey: `${loaiCoc}::${tenDoan}::${Number(chieuDaiM || 0)}`,
-            itemLabel: `${loaiCoc} | ${tenDoan} | ${Number(chieuDaiM || 0)}m`,
+            itemKey: `${templateId || maCoc || loaiCoc}::${tenDoan}::${Number(chieuDaiM || 0)}`,
+            itemLabel: `${maCoc || loaiCoc} | ${tenDoan} | ${Number(chieuDaiM || 0)}m`,
+            templateId,
+            maCoc,
             loaiCoc,
             tenDoan,
             chieuDaiM: Number(chieuDaiM || 0),
@@ -210,6 +225,8 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
       })
 
       setMessage(`Đã tạo phiếu ${result.data?.countSheetCode || ''} chờ Thủ kho xác nhận.`)
+      setTemplateId('')
+      setMaCoc('')
       setLoaiCoc('')
       setTenDoan('')
       setChieuDaiM('')
@@ -294,15 +311,20 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
           </label>
 
           <label className="space-y-2">
-            <span className="text-sm font-medium">Loại cọc</span>
+            <span className="text-sm font-medium">Mã cọc</span>
             <div className="space-y-2">
               <select
                 className="w-full rounded-xl border px-3 py-2.5 text-sm"
                 style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface)' }}
-                value={loaiCoc}
-                onChange={(event) => setLoaiCoc(event.target.value)}
+                value={templateId || maCoc || loaiCoc}
+                onChange={(event) => {
+                  const option = props.pageData.loaiCocOptions.find((item) => item.value === event.target.value)
+                  setTemplateId(option?.templateId || '')
+                  setMaCoc(option?.maCoc || '')
+                  setLoaiCoc(option?.loaiCoc || '')
+                }}
               >
-                <option value="">Chọn loại cọc</option>
+                <option value="">Chọn mã cọc</option>
                 {props.pageData.loaiCocOptions.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}

@@ -401,6 +401,7 @@ export function applyPileTemplate(
     ...payload,
     header: {
       ...payload.header,
+      ma_coc: template.ma_coc || payload.header.ma_coc,
       loai_coc: template.loai_coc || payload.header.loai_coc,
       mac_be_tong: template.mac_be_tong || payload.header.mac_be_tong,
       cap_phoi_variant: payload.header.cap_phoi_variant,
@@ -939,6 +940,7 @@ export function createDefaultPayload(): BocTachDetailPayload {
     header: {
       da_id: '',
       kh_id: '',
+      ma_coc: '',
       loai_coc: '',
       do_ngoai: 0,
       chieu_day: 0,

@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type {
@@ -11,10 +11,12 @@ import type {
   XuatHangVoucherDetail,
 } from '@/lib/xuat-hang/repository'
 import { isAdminRole, isCommercialRole, isWarehouseRole } from '@/lib/auth/roles'
-import { decodeQrFromImageFile } from '@/lib/qr/decode-image'
+import { decodeQrFromCanvasImageSource, decodeQrFromImageFile } from '@/lib/qr/decode-image'
 import {
   fetchXuatHangCreateBootstrap,
   fetchXuatHangVoucherDetail,
+  submitReopenConfirmedShipment,
+  submitReopenShipmentReturnRequest,
   submitConfirmXuatHangVoucher,
   submitCreateXuatHangVoucher,
   submitDeleteXuatHangVouchers,
@@ -72,7 +74,7 @@ type BarcodeDetectorLike = {
 
 type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => BarcodeDetectorLike
 
-const CREATE_BOOTSTRAP_CACHE_KEY = 'xuat-hang:create-bootstrap:v1'
+const CREATE_BOOTSTRAP_CACHE_KEY = 'xuat-hang:create-bootstrap:v3'
 
 function readCachedCreateBootstrap() {
   if (typeof window === 'undefined') return null
@@ -121,8 +123,22 @@ function round3(value: number) {
   return Number.isFinite(rounded) ? rounded : 0
 }
 
-function buildExactShipmentItemKey(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${String(loaiCoc || '').trim()}::${String(tenDoan || '').trim()}::${round3(Number(chieuDaiM || 0))}`
+function buildShipmentIdentityKey(identity: { templateId?: string | null; maCoc?: string | null; loaiCoc: string }) {
+  const maCoc = String(identity.maCoc || '').trim()
+  if (maCoc) return maCoc
+  const templateId = String(identity.templateId || '').trim()
+  if (templateId) return templateId
+  return String(identity.loaiCoc || '').trim()
+}
+
+function buildExactShipmentItemKey(item: {
+  templateId?: string | null
+  maCoc?: string | null
+  loaiCoc: string
+  tenDoan: string
+  chieuDaiM: number
+}) {
+  return `${buildShipmentIdentityKey(item)}::${String(item.tenDoan || '').trim()}::${round3(Number(item.chieuDaiM || 0))}`
 }
 
 function deriveShipmentStockSegmentGroup(tenDoan: string) {
@@ -132,8 +148,14 @@ function deriveShipmentStockSegmentGroup(tenDoan: string) {
   return String(tenDoan || '').trim()
 }
 
-function buildShipmentStockSourceKey(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${String(loaiCoc || '').trim()}::${deriveShipmentStockSegmentGroup(tenDoan)}::${round3(Number(chieuDaiM || 0))}`
+function buildShipmentStockSourceKey(item: {
+  templateId?: string | null
+  maCoc?: string | null
+  loaiCoc: string
+  tenDoan: string
+  chieuDaiM: number
+}) {
+  return `${buildShipmentIdentityKey(item)}::${deriveShipmentStockSegmentGroup(item.tenDoan)}::${round3(Number(item.chieuDaiM || 0))}`
 }
 
 function computeReturnCapacity(detail: XuatHangVoucherDetail | null | undefined) {
@@ -239,6 +261,7 @@ export function PhieuXuatPageClient(props: {
   const [selectedShipmentSerialByLine, setSelectedShipmentSerialByLine] = useState<Record<string, string>>({})
   const [shipmentInputMode, setShipmentInputMode] = useState<ShipmentInputMode>('SELECT')
   const [mobileShipmentStep, setMobileShipmentStep] = useState<MobileShipmentStep>('PICK')
+  const [mobileShipmentPanelOpen, setMobileShipmentPanelOpen] = useState(false)
   const [mobileExpandedShipmentLineId, setMobileExpandedShipmentLineId] = useState('')
   const [mobileSerialListOpen, setMobileSerialListOpen] = useState(false)
   const [mobileScanPanelOpen, setMobileScanPanelOpen] = useState(false)
@@ -270,6 +293,8 @@ export function PhieuXuatPageClient(props: {
   const [error, setError] = useState('')
   const [hasMounted, setHasMounted] = useState(false)
   const shipmentVideoRef = useRef<HTMLVideoElement | null>(null)
+  const shipmentVideoCompactRef = useRef<HTMLVideoElement | null>(null)
+  const shipmentVideoDetailRef = useRef<HTMLVideoElement | null>(null)
   const shipmentStreamRef = useRef<MediaStream | null>(null)
   const shipmentFrameRef = useRef<number | null>(null)
   const shipmentReadyTimeoutRef = useRef<number | null>(null)
@@ -277,13 +302,52 @@ export function PhieuXuatPageClient(props: {
   const shipmentDetectLockRef = useRef(false)
   const mobileShipmentLineRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const returnVideoRef = useRef<HTMLVideoElement | null>(null)
+  const returnVideoCompactRef = useRef<HTMLVideoElement | null>(null)
+  const returnVideoDetailRef = useRef<HTMLVideoElement | null>(null)
+  const returnCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const returnStreamRef = useRef<MediaStream | null>(null)
   const returnFrameRef = useRef<number | null>(null)
   const returnReadyTimeoutRef = useRef<number | null>(null)
+  const returnNoQrTimeoutRef = useRef<number | null>(null)
   const returnDetectorRef = useRef<BarcodeDetectorLike | null>(null)
   const returnDetectLockRef = useRef(false)
   const detailPageRef = useRef(detailPage)
   const createBootstrapRequestKeyRef = useRef('')
+
+  const getActiveVideoNode = useCallback((candidates: Array<HTMLVideoElement | null>) => {
+    return (
+      candidates.find((node) => Boolean(node && node.isConnected && node.offsetParent !== null)) ||
+      candidates.find(Boolean) ||
+      null
+    )
+  }, [])
+
+  const getActiveShipmentVideoNode = useCallback(() => {
+    const node = getActiveVideoNode([shipmentVideoDetailRef.current, shipmentVideoCompactRef.current])
+    shipmentVideoRef.current = node
+    return node
+  }, [getActiveVideoNode])
+
+  const getActiveReturnVideoNode = useCallback(() => {
+    const node = getActiveVideoNode([returnVideoDetailRef.current, returnVideoCompactRef.current])
+    returnVideoRef.current = node
+    return node
+  }, [getActiveVideoNode])
+
+  const bindVideoNode = useCallback(async (node: HTMLVideoElement | null, stream: MediaStream | null) => {
+    if (!node) return
+    node.srcObject = stream
+    node.autoplay = true
+    node.muted = true
+    node.playsInline = true
+    if (stream) {
+      try {
+        await node.play()
+      } catch {
+        // Ignore autoplay races; onLoadedData will settle the state when video becomes ready.
+      }
+    }
+  }, [])
 
   useEffect(() => {
     detailPageRef.current = detailPage
@@ -298,6 +362,16 @@ export function PhieuXuatPageClient(props: {
     setListSectionOpen(true)
     setCreateSectionOpen(false)
   }, [canCreate, detailPage])
+
+  useEffect(() => {
+    if (!shipmentScannerOpen || !shipmentStreamRef.current) return
+    void bindVideoNode(getActiveShipmentVideoNode(), shipmentStreamRef.current)
+  }, [bindVideoNode, getActiveShipmentVideoNode, shipmentScannerOpen, mobileScanPanelOpen, detailPage])
+
+  useEffect(() => {
+    if (!returnScannerOpen || !returnStreamRef.current) return
+    void bindVideoNode(getActiveReturnVideoNode(), returnStreamRef.current)
+  }, [bindVideoNode, getActiveReturnVideoNode, returnScannerOpen, returnInputMode, detailPage, mobileReturnStep])
 
   useEffect(() => {
     if (detailPageRef.current) return
@@ -328,10 +402,7 @@ export function PhieuXuatPageClient(props: {
           const result = await fetchXuatHangCreateBootstrap(targetMode)
           if (!active || !result.data) return
           writeCachedCreateBootstrap(targetMode, result.data)
-          setCreateBootstrap((current) => {
-			  if (!current) return current;
-			  return mergeCreateBootstrap(current, result.data)
-			})
+          setCreateBootstrap((current) => mergeCreateBootstrap(current, result.data))
           if (targetMode === 'DON_HANG') {
             setCreateBootstrapLoaded(true)
           } else {
@@ -549,6 +620,7 @@ export function PhieuXuatPageClient(props: {
     setSelectedShipmentSerialByLine({})
     setShipmentInputMode('SELECT')
     setMobileShipmentStep('PICK')
+    setMobileShipmentPanelOpen(false)
     setMobileExpandedShipmentLineId('')
     setMobileSerialListOpen(false)
     setMobileScanPanelOpen(false)
@@ -576,6 +648,9 @@ export function PhieuXuatPageClient(props: {
     stopReturnScanner()
     setShipmentScanInfo('')
     setShipmentScanError('')
+    // stop*Scanner are intentionally omitted here because this effect resets scanner UI
+    // whenever detail payload changes, and the handlers are stable enough for this lifecycle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedExpandedDetail])
 
   useEffect(() => {
@@ -583,6 +658,8 @@ export function PhieuXuatPageClient(props: {
       stopShipmentScanner()
       stopReturnScanner()
     }
+    // Cleanup runs only on unmount; stop handlers are intentionally not tracked here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -617,7 +694,7 @@ export function PhieuXuatPageClient(props: {
     const bucket = new Map<string, (typeof orderShipmentSources)[number]>()
     for (const item of orderShipmentSources) {
       if (item.loaiCoc === 'PHU_KIEN') continue
-      const exactItemKey = buildExactShipmentItemKey(item.loaiCoc, item.tenDoan, item.chieuDaiM)
+      const exactItemKey = buildExactShipmentItemKey(item)
       const current = bucket.get(exactItemKey)
       if (!current || item.availableQty > current.availableQty) {
         bucket.set(exactItemKey, item)
@@ -641,7 +718,7 @@ export function PhieuXuatPageClient(props: {
       if (!requestedQty) continue
       const actualSourceKey =
         substitutionDraftBySource[row.sourceKey]?.actualSourceKey ||
-        buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM)
+        buildExactShipmentItemKey(row)
       const actualSource = actualShipmentSourceByStockKey.get(actualSourceKey) || row
       bucket.set(actualSource.stockSourceKey, (bucket.get(actualSource.stockSourceKey) ?? 0) + requestedQty)
     }
@@ -653,7 +730,7 @@ export function PhieuXuatPageClient(props: {
     for (const row of sourceRows) {
       const actualSourceKey =
         substitutionDraftBySource[row.sourceKey]?.actualSourceKey ||
-        buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM)
+        buildExactShipmentItemKey(row)
       const actualSource = actualShipmentSourceByStockKey.get(actualSourceKey) || row
       const sharedRequestedQty = requestedQtyBySharedStockKey.get(actualSource.stockSourceKey) ?? 0
       const remainingQty = Math.max(round3(actualSource.availableQty - sharedRequestedQty), 0)
@@ -668,7 +745,7 @@ export function PhieuXuatPageClient(props: {
       const currentRequestedQty = Math.max(toNumber(requestedBySource[row.sourceKey]), 0)
       const actualSourceKey =
         substitutionDraftBySource[row.sourceKey]?.actualSourceKey ||
-        buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM)
+        buildExactShipmentItemKey(row)
       const actualSource = actualShipmentSourceByStockKey.get(actualSourceKey) || row
       const sharedRequestedQty = requestedQtyBySharedStockKey.get(actualSource.stockSourceKey) ?? 0
       const remainingQty = Math.max(round3(actualSource.availableQty - (sharedRequestedQty - currentRequestedQty)), 0)
@@ -788,7 +865,7 @@ export function PhieuXuatPageClient(props: {
     }
     for (const line of hydratedExpandedDetail?.lines || []) {
       if (!line.lineId || line.loaiCoc === 'PHU_KIEN') continue
-      const groupedStockSourceKey = buildShipmentStockSourceKey(line.loaiCoc, line.tenDoan, line.chieuDaiM)
+      const groupedStockSourceKey = buildShipmentStockSourceKey(line)
       options.set(
         line.lineId,
         availableByStockSourceKey.get(groupedStockSourceKey) || availableByStockSourceKey.get(line.stockSourceKey) || []
@@ -1041,7 +1118,6 @@ export function PhieuXuatPageClient(props: {
         setCreateBootstrap(refreshedBootstrap.data)
         setCreateBootstrapLoaded(true)
       }
-      router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không xóa được phiếu xuất hàng.')
     } finally {
@@ -1049,7 +1125,7 @@ export function PhieuXuatPageClient(props: {
     }
   }
 
-  function stopShipmentScanner() {
+  const stopShipmentScanner = useCallback(() => {
     if (shipmentFrameRef.current != null) {
       cancelAnimationFrame(shipmentFrameRef.current)
       shipmentFrameRef.current = null
@@ -1064,14 +1140,12 @@ export function PhieuXuatPageClient(props: {
       }
       shipmentStreamRef.current = null
     }
-    if (shipmentVideoRef.current) {
-      shipmentVideoRef.current.srcObject = null
-    }
+    void bindVideoNode(getActiveShipmentVideoNode(), null)
     shipmentDetectLockRef.current = false
     setShipmentCameraReady(false)
     setShipmentScannerOpen(false)
     setShipmentScannerStarting(false)
-  }
+  }, [bindVideoNode, getActiveShipmentVideoNode])
 
   async function resolveShipmentSerial(code: string) {
     if (!hydratedExpandedDetail) return false
@@ -1249,19 +1323,20 @@ export function PhieuXuatPageClient(props: {
   }
 
   function runShipmentScanLoop() {
-    if (!shipmentScannerOpen || !shipmentVideoRef.current || !shipmentDetectorRef.current) return
+    if (!shipmentScannerOpen || !getActiveShipmentVideoNode() || !shipmentDetectorRef.current) return
 
     const tick = async () => {
-      if (!shipmentScannerOpen || !shipmentVideoRef.current || !shipmentDetectorRef.current) return
+      const videoNode = getActiveShipmentVideoNode()
+      if (!shipmentScannerOpen || !videoNode || !shipmentDetectorRef.current) return
       shipmentFrameRef.current = requestAnimationFrame(() => {
         void tick()
       })
       if (shipmentDetectLockRef.current) return
-      if (shipmentVideoRef.current.readyState < 2) return
+      if (videoNode.readyState < 2) return
 
       shipmentDetectLockRef.current = true
       try {
-        const codes = await shipmentDetectorRef.current.detect(shipmentVideoRef.current)
+        const codes = await shipmentDetectorRef.current.detect(videoNode)
         const rawValue = String(codes.find((item) => normalizeCode(String(item.rawValue || '')))?.rawValue || '').trim()
         if (rawValue) {
           const ok = await addShipmentSerialFromCode(rawValue)
@@ -1315,13 +1390,7 @@ export function PhieuXuatPageClient(props: {
       setShipmentScannerOpen(true)
       setShipmentCameraReady(false)
 
-      if (shipmentVideoRef.current) {
-        shipmentVideoRef.current.srcObject = stream
-        shipmentVideoRef.current.autoplay = true
-        shipmentVideoRef.current.muted = true
-        shipmentVideoRef.current.playsInline = true
-        await shipmentVideoRef.current.play()
-      }
+      await bindVideoNode(getActiveShipmentVideoNode(), stream)
 
       shipmentReadyTimeoutRef.current = window.setTimeout(() => {
         setShipmentScanError('Camera đã bật nhưng chưa lên hình. Hãy kiểm tra quyền Camera của browser hoặc dùng quét từ ảnh.')
@@ -1355,7 +1424,7 @@ export function PhieuXuatPageClient(props: {
     }
   }
 
-  function stopReturnScanner() {
+  const stopReturnScanner = useCallback(() => {
     if (returnFrameRef.current != null) {
       cancelAnimationFrame(returnFrameRef.current)
       returnFrameRef.current = null
@@ -1364,36 +1433,64 @@ export function PhieuXuatPageClient(props: {
       clearTimeout(returnReadyTimeoutRef.current)
       returnReadyTimeoutRef.current = null
     }
+    if (returnNoQrTimeoutRef.current != null) {
+      clearTimeout(returnNoQrTimeoutRef.current)
+      returnNoQrTimeoutRef.current = null
+    }
     if (returnStreamRef.current) {
       for (const track of returnStreamRef.current.getTracks()) {
         track.stop()
       }
       returnStreamRef.current = null
     }
-    if (returnVideoRef.current) {
-      returnVideoRef.current.srcObject = null
-    }
+    void bindVideoNode(getActiveReturnVideoNode(), null)
     returnDetectLockRef.current = false
     setReturnCameraReady(false)
     setReturnScannerOpen(false)
     setReturnScannerStarting(false)
-  }
+  }, [bindVideoNode, getActiveReturnVideoNode])
 
   function runReturnScanLoop() {
-    if (!returnScannerOpen || !returnVideoRef.current || !returnDetectorRef.current) return
+    if (!returnScannerOpen || !getActiveReturnVideoNode()) return
 
     const tick = async () => {
-      if (!returnScannerOpen || !returnVideoRef.current || !returnDetectorRef.current) return
+      const videoNode = getActiveReturnVideoNode()
+      if (!returnScannerOpen || !videoNode) return
       returnFrameRef.current = requestAnimationFrame(() => {
         void tick()
       })
       if (returnDetectLockRef.current) return
-      if (returnVideoRef.current.readyState < 2) return
+      if (videoNode.readyState < 2) return
 
       returnDetectLockRef.current = true
       try {
-        const codes = await returnDetectorRef.current.detect(returnVideoRef.current)
-        const rawValue = String(codes.find((item) => normalizeCode(String(item.rawValue || '')))?.rawValue || '').trim()
+        const canvas = returnCanvasRef.current
+        let rawValue = ''
+        if (canvas) {
+          const width = videoNode.videoWidth || 1280
+          const height = videoNode.videoHeight || 720
+          canvas.width = width
+          canvas.height = height
+          const context = canvas.getContext('2d', { willReadFrequently: true })
+          if (context) {
+            context.drawImage(videoNode, 0, 0, width, height)
+            if (returnDetectorRef.current) {
+              const bitmap = await createImageBitmap(canvas)
+              try {
+                const codes = await returnDetectorRef.current.detect(bitmap)
+                rawValue = String(codes.find((item) => normalizeCode(String(item.rawValue || '')))?.rawValue || '').trim()
+              } finally {
+                bitmap.close()
+              }
+            }
+            if (!rawValue) {
+              rawValue = decodeQrFromCanvasImageSource(canvas)
+            }
+          }
+        } else if (returnDetectorRef.current) {
+          const codes = await returnDetectorRef.current.detect(videoNode)
+          rawValue = String(codes.find((item) => normalizeCode(String(item.rawValue || '')))?.rawValue || '').trim()
+        }
         if (rawValue) {
           const ok = upsertReturnedSerialByCode(rawValue)
           if (ok) {
@@ -1423,9 +1520,6 @@ export function PhieuXuatPageClient(props: {
       }
 
       const Detector = (window as Window & { BarcodeDetector?: BarcodeDetectorCtor }).BarcodeDetector
-      if (!Detector) {
-        throw new Error('Trình duyệt này chưa hỗ trợ quét QR bằng camera. Vẫn có thể dùng ảnh QR hoặc nhập mã.')
-      }
 
       let stream: MediaStream | null = null
       try {
@@ -1441,24 +1535,22 @@ export function PhieuXuatPageClient(props: {
         stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       }
 
-      returnDetectorRef.current = new Detector({ formats: ['qr_code'] })
+      returnDetectorRef.current = Detector ? new Detector({ formats: ['qr_code'] }) : null
       returnStreamRef.current = stream
       setReturnScannerOpen(true)
       setReturnCameraReady(false)
 
-      if (returnVideoRef.current) {
-        returnVideoRef.current.srcObject = stream
-        returnVideoRef.current.autoplay = true
-        returnVideoRef.current.muted = true
-        returnVideoRef.current.playsInline = true
-        await returnVideoRef.current.play()
-      }
+      await bindVideoNode(getActiveReturnVideoNode(), stream)
 
       returnReadyTimeoutRef.current = window.setTimeout(() => {
         setReturnScanError('Camera đã bật nhưng chưa lên hình. Hãy kiểm tra quyền Camera của browser hoặc dùng quét từ ảnh.')
       }, 2500)
 
-      setReturnScanInfo('Đưa QR vào giữa khung. Scan trúng serial nào thì hệ thống tự thêm vào danh sách trả lại.')
+      returnNoQrTimeoutRef.current = window.setTimeout(() => {
+        setReturnScanInfo('Camera vẫn đang quét nhưng chưa nhận được QR. Hãy để mã sáng rõ, không bị lóa, hoặc chụp/crop sát QR rồi dùng chọn ảnh.')
+      }, 3000)
+
+      setReturnScanInfo('Camera đang mở. Đưa QR vào giữa khung, giữ rõ trong 1-2 giây để hệ thống tự thêm vào danh sách trả lại.')
       runReturnScanLoop()
     } catch (err) {
       stopReturnScanner()
@@ -1491,7 +1583,7 @@ export function PhieuXuatPageClient(props: {
               itemLabel: row.itemLabel,
               actualSourceKey:
                 substitutionDraftBySource[row.sourceKey]?.actualSourceKey ||
-                buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM),
+                buildExactShipmentItemKey(row),
               substitutionReason: substitutionDraftBySource[row.sourceKey]?.reason || '',
             }))
             .filter((row) => row.requestedQty > 0)
@@ -1532,7 +1624,7 @@ export function PhieuXuatPageClient(props: {
         const draft = substitutionDraftBySource[row.sourceKey]
         return Boolean(
           draft?.actualSourceKey &&
-            draft.actualSourceKey !== buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM) &&
+            draft.actualSourceKey !== buildExactShipmentItemKey(row) &&
             !draft.reason.trim()
         )
       })
@@ -1565,18 +1657,7 @@ export function PhieuXuatPageClient(props: {
         lines,
       })
       if (!result.data) throw new Error('Không tạo được phiếu xuất hàng.')
-      const detailResult = await fetchXuatHangVoucherDetail(result.data.voucherId)
-      if (detailResult.data) {
-        const nextRow = buildVoucherListItemFromDetail(detailResult.data)
-        setVouchers((current) => [nextRow, ...current.filter((item) => item.voucherId !== nextRow.voucherId)])
-        setExpandedVoucherId(nextRow.voucherId)
-        setExpandedVoucherDetail(detailResult.data)
-      }
-      const refreshedBootstrap = await fetchXuatHangCreateBootstrap()
-      if (refreshedBootstrap.data) {
-        setCreateBootstrap(refreshedBootstrap.data)
-        setCreateBootstrapLoaded(true)
-      }
+      const createdVoucherId = result.data.voucherId
       setMessage('Đã lập phiếu đề xuất xuất hàng.')
       setRequestedBySource({})
       setSubstitutionDraftBySource({})
@@ -1585,7 +1666,32 @@ export function PhieuXuatPageClient(props: {
       setSelectedStockQty('')
       setSelectedStockUnitPrice('')
       setCreateNote('')
-      router.refresh()
+      setExpandedVoucherId(createdVoucherId)
+
+      void (async () => {
+        try {
+          const detailResult = await fetchXuatHangVoucherDetail(createdVoucherId)
+          if (detailResult.data) {
+            const nextRow = buildVoucherListItemFromDetail(detailResult.data)
+            setVouchers((current) => [nextRow, ...current.filter((item) => item.voucherId !== nextRow.voucherId)])
+            setExpandedVoucherDetail(detailResult.data)
+          }
+        } catch {
+          // Keep the create flow fast; detail can refresh lazily.
+        }
+      })()
+
+      void (async () => {
+        try {
+          const refreshedBootstrap = await fetchXuatHangCreateBootstrap()
+          if (refreshedBootstrap.data) {
+            setCreateBootstrap(refreshedBootstrap.data)
+            setCreateBootstrapLoaded(true)
+          }
+        } catch {
+          // Ignore background bootstrap refresh failures; user can keep working.
+        }
+      })()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không tạo được phiếu xuất hàng.')
     } finally {
@@ -1647,7 +1753,18 @@ export function PhieuXuatPageClient(props: {
         )
       }
       setMessage('Đã xác nhận thực xuất hàng.')
-      router.refresh()
+
+      void (async () => {
+        try {
+          const refreshedBootstrap = await fetchXuatHangCreateBootstrap()
+          if (refreshedBootstrap.data) {
+            setCreateBootstrap(refreshedBootstrap.data)
+            setCreateBootstrapLoaded(true)
+          }
+        } catch {
+          // Keep confirm flow responsive; bootstrap can refresh lazily.
+        }
+      })()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không xác nhận được phiếu xuất hàng.')
     } finally {
@@ -1702,9 +1819,56 @@ export function PhieuXuatPageClient(props: {
         )
       }
       setMessage(`Đã ghi nhận đề nghị trả ${result.data?.requestedCount || totalRequestedQty} cọc. Chờ Thủ kho xác nhận serial thực tế.`)
-      router.refresh()
+
+      void (async () => {
+        try {
+          const refreshedBootstrap = await fetchXuatHangCreateBootstrap()
+          if (refreshedBootstrap.data) {
+            setCreateBootstrap(refreshedBootstrap.data)
+            setCreateBootstrapLoaded(true)
+          }
+        } catch {
+          // Ignore background refresh failure.
+        }
+      })()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không tạo được đề nghị trả hàng.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  async function reopenReturnRequest() {
+    if (!hydratedExpandedDetail) return
+    setPending(true)
+    setError('')
+    setMessage('')
+    try {
+      await submitReopenShipmentReturnRequest({
+        voucherId: hydratedExpandedDetail.voucherId,
+      })
+      const detailResult = await fetchXuatHangVoucherDetail(hydratedExpandedDetail.voucherId)
+      if (detailResult.data) {
+        const nextDetail = detailResult.data
+        setExpandedVoucherDetail(nextDetail)
+        setVouchers((current) =>
+          current.map((item) =>
+            item.voucherId === hydratedExpandedDetail.voucherId
+              ? {
+                  ...item,
+                  detail: nextDetail,
+                  requestedQtyTotal: nextDetail.requestedQtyTotal,
+                  actualQtyTotal: nextDetail.actualQtyTotal,
+                  status: nextDetail.status,
+                }
+              : item
+          )
+        )
+      }
+      setReturnPanelVoucherId(hydratedExpandedDetail.voucherId)
+      setMessage('Đã mở lại đề nghị trả hàng để KTBH chỉnh sửa.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Không mở lại được đề nghị trả hàng.')
     } finally {
       setPending(false)
     }
@@ -1750,7 +1914,43 @@ export function PhieuXuatPageClient(props: {
       setMessage(`Đã xử lý ${result.data?.processedCount || items.length} serial trả lại sau giao.`)
       setReturnDraftRows([])
       setReturnNote('')
-      router.refresh()
+
+      void (async () => {
+        try {
+          const detailResult = await fetchXuatHangVoucherDetail(hydratedExpandedDetail.voucherId)
+          if (detailResult.data) {
+            const nextDetail = detailResult.data
+            setExpandedVoucherDetail(nextDetail)
+            setVouchers((current) =>
+              current.map((item) =>
+                item.voucherId === hydratedExpandedDetail.voucherId
+                  ? {
+                      ...item,
+                      detail: nextDetail,
+                      requestedQtyTotal: nextDetail.requestedQtyTotal,
+                      actualQtyTotal: nextDetail.actualQtyTotal,
+                      status: nextDetail.status,
+                    }
+                  : item
+              )
+            )
+          }
+        } catch {
+          // Ignore background detail refresh failure.
+        }
+      })()
+
+      void (async () => {
+        try {
+          const refreshedBootstrap = await fetchXuatHangCreateBootstrap()
+          if (refreshedBootstrap.data) {
+            setCreateBootstrap(refreshedBootstrap.data)
+            setCreateBootstrapLoaded(true)
+          }
+        } catch {
+          // Ignore background bootstrap refresh failure.
+        }
+      })()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không xử lý được trả lại sau giao.')
     } finally {
@@ -1758,8 +1958,56 @@ export function PhieuXuatPageClient(props: {
     }
   }
 
+  async function reopenConfirmedShipment() {
+    if (!hydratedExpandedDetail) return
+    setPending(true)
+    setError('')
+    setMessage('')
+    try {
+      await submitReopenConfirmedShipment({
+        voucherId: hydratedExpandedDetail.voucherId,
+      })
+      const detailResult = await fetchXuatHangVoucherDetail(hydratedExpandedDetail.voucherId)
+      if (detailResult.data) {
+        const nextDetail = detailResult.data
+        setExpandedVoucherDetail(nextDetail)
+        setVouchers((current) =>
+          current.map((item) =>
+            item.voucherId === hydratedExpandedDetail.voucherId
+              ? {
+                  ...item,
+                  detail: nextDetail,
+                  requestedQtyTotal: nextDetail.requestedQtyTotal,
+                  actualQtyTotal: nextDetail.actualQtyTotal,
+                  status: nextDetail.status,
+                }
+              : item
+          )
+        )
+      }
+      setReturnPanelVoucherId('')
+      setMessage('Admin đã mở lại phiếu xuất hàng về trạng thái chờ xác nhận.')
+
+      void (async () => {
+        try {
+          const refreshedBootstrap = await fetchXuatHangCreateBootstrap()
+          if (refreshedBootstrap.data) {
+            setCreateBootstrap(refreshedBootstrap.data)
+            setCreateBootstrapLoaded(true)
+          }
+        } catch {
+          // Keep reopen flow responsive; bootstrap can refresh lazily.
+        }
+      })()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Không mở lại được phiếu xuất hàng.')
+    } finally {
+      setPending(false)
+    }
+  }
+
   function upsertReturnedSerialByCode(serialCode: string) {
-    const normalized = normalizeCode(serialCode)
+    const normalized = extractSerialCodeFromQrValue(serialCode)
     if (!normalized) {
       setReturnScanError('Cần serial_code hoặc nội dung QR để thêm trả lại.')
       return false
@@ -1867,6 +2115,7 @@ export function PhieuXuatPageClient(props: {
 
   return (
     <div>
+      <canvas ref={returnCanvasRef} className="hidden" aria-hidden="true" />
       {canCreate && !detailPage ? (
         <section className="space-y-5 border-b px-6 py-5" style={{ borderColor: 'var(--color-border)' }}>
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1895,7 +2144,7 @@ export function PhieuXuatPageClient(props: {
           {createSectionOpen ? (
             <div className="space-y-5">
           {createBootstrapPending ? (
-            <div className="rounded-2xl border px-4 py-8 text-center text-sm text-[var(--color-muted)]" style={{ borderColor: 'var(--color-border)' }}>
+            <div className="border-y px-1 py-6 text-sm text-[var(--color-muted)]" style={{ borderColor: 'var(--color-border)' }}>
               Đang tải dữ liệu lập phiếu xuất hàng...
             </div>
           ) : (
@@ -1964,25 +2213,25 @@ export function PhieuXuatPageClient(props: {
                 value={sourceQuery}
                 onChange={(event) => setSourceQuery(event.target.value)}
                 className="app-input w-full rounded-xl px-3 py-2 text-sm"
-                placeholder={mode === 'DON_HANG' ? 'Tìm theo dòng hàng, báo giá, dự án...' : 'Tìm theo loại cọc, đoạn, chiều dài...'}
+                placeholder={mode === 'DON_HANG' ? 'Tìm theo dòng hàng, báo giá, dự án...' : 'Tìm theo mã cọc, đoạn, chiều dài...'}
               />
             </Field>
             {mode === 'DON_HANG' && selectedQuote ? (
-              <Info label="Khách hàng" value={selectedQuote.customerName} />
+              <InlineInfo label="Khách hàng" value={selectedQuote.customerName} />
             ) : null}
             {mode === 'DON_HANG' && selectedQuote ? (
-              <Info
+              <InlineInfo
                 label="Dự án / Báo giá"
                 value={`${selectedQuote.projectName}${selectedQuote.maBaoGia ? ` · ${selectedQuote.maBaoGia}` : ''}`}
               />
             ) : null}
             {mode === 'DON_HANG' && selectedQuote ? (
-              <Info label="Đơn hàng" value={selectedQuote.orderLabels.join(', ')} />
+              <InlineInfo label="Đơn hàng" value={selectedQuote.orderLabels.join(', ')} />
             ) : null}
           </div>
 
           {mode === 'DON_HANG' ? (
-            <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: 'var(--color-border)' }}>
+            <div className="overflow-x-auto border-y" style={{ borderColor: 'var(--color-border)' }}>
               <table className="min-w-full text-left text-sm">
                 <thead>
                   <tr style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 5%, white)' }}>
@@ -1999,7 +2248,7 @@ export function PhieuXuatPageClient(props: {
                   {sourceRows.map((row) => {
                     const draft = substitutionDraftBySource[row.sourceKey]
                     const actualSourceKey =
-                      draft?.actualSourceKey || buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM)
+                      draft?.actualSourceKey || buildExactShipmentItemKey(row)
                     const actualSource = actualShipmentSourceByStockKey.get(actualSourceKey) || row
                     const effectiveAvailableQty = effectiveAvailableBySourceKey.get(row.sourceKey) ?? row.availableQty
                     const displayAvailableQty = displayAvailableBySourceKey.get(row.sourceKey) ?? row.availableQty
@@ -2010,7 +2259,7 @@ export function PhieuXuatPageClient(props: {
                     const showSubstitutionEditor = row.loaiCoc !== 'PHU_KIEN' && Boolean(draft?.expanded)
                     const isSubstituted =
                       row.loaiCoc !== 'PHU_KIEN' &&
-                      actualSourceKey !== buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM)
+                      actualSourceKey !== buildExactShipmentItemKey(row)
                     return (
                       <Fragment key={row.sourceKey}>
                         <tr className="border-t" style={{ borderColor: 'var(--color-border)' }}>
@@ -2037,7 +2286,7 @@ export function PhieuXuatPageClient(props: {
                                     setSubstitutionDraftBySource((current) => {
                                           const next = current[row.sourceKey] || {
                                             expanded: false,
-                                            actualSourceKey: buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM),
+                                            actualSourceKey: buildExactShipmentItemKey(row),
                                             reason: '',
                                           }
                                       return {
@@ -2046,7 +2295,7 @@ export function PhieuXuatPageClient(props: {
                                           ...next,
                                           expanded: !next.expanded,
                                           actualSourceKey:
-                                            next.actualSourceKey || buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM),
+                                            next.actualSourceKey || buildExactShipmentItemKey(row),
                                         },
                                       }
                                     })
@@ -2099,8 +2348,8 @@ export function PhieuXuatPageClient(props: {
                           <tr className="border-t" style={{ borderColor: 'var(--color-border)' }}>
                             <td colSpan={7} className="px-4 py-3">
                               <div
-                                className="grid gap-3 rounded-2xl border p-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]"
-                                style={{ borderColor: 'var(--color-border)', backgroundColor: 'color-mix(in srgb, white 97%, var(--color-primary) 2%)' }}
+                                className="grid gap-3 border-l-2 pl-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]"
+                                style={{ borderColor: 'color-mix(in srgb, var(--color-primary) 18%, white)' }}
                               >
                                 <Field label="Mã thực xuất">
                                   <select
@@ -2111,7 +2360,7 @@ export function PhieuXuatPageClient(props: {
                                         [row.sourceKey]: {
                                           expanded: true,
                                           actualSourceKey:
-                                            event.target.value || buildExactShipmentItemKey(row.loaiCoc, row.tenDoan, row.chieuDaiM),
+                                            event.target.value || buildExactShipmentItemKey(row),
                                           reason: current[row.sourceKey]?.reason || '',
                                         },
                                       }))
@@ -2120,8 +2369,8 @@ export function PhieuXuatPageClient(props: {
                                   >
                                     {actualShipmentSourceOptions.map((option) => (
                                       <option
-                                        key={`${row.sourceKey}-${buildExactShipmentItemKey(option.loaiCoc, option.tenDoan, option.chieuDaiM)}`}
-                                        value={buildExactShipmentItemKey(option.loaiCoc, option.tenDoan, option.chieuDaiM)}
+                                        key={`${row.sourceKey}-${buildExactShipmentItemKey(option)}`}
+                                        value={buildExactShipmentItemKey(option)}
                                       >
                                         {option.itemLabel} · Có thể giao {formatNumber(option.availableQty)}
                                       </option>
@@ -2164,7 +2413,7 @@ export function PhieuXuatPageClient(props: {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="grid gap-3 rounded-2xl border p-4 md:grid-cols-[minmax(0,1.8fr)_140px_160px_auto]" style={{ borderColor: 'var(--color-border)' }}>
+              <div className="grid gap-3 border-y py-4 md:grid-cols-[minmax(0,1.8fr)_140px_160px_auto]" style={{ borderColor: 'var(--color-border)' }}>
                 <div>
                   <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">Mặt hàng tồn kho</div>
                   <select
@@ -2215,7 +2464,7 @@ export function PhieuXuatPageClient(props: {
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-2xl border" style={{ borderColor: 'var(--color-border)' }}>
+              <div className="overflow-x-auto border-y" style={{ borderColor: 'var(--color-border)' }}>
                 <table className="min-w-full text-left text-sm">
                   <thead>
                     <tr style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 5%, white)' }}>
@@ -2294,24 +2543,26 @@ export function PhieuXuatPageClient(props: {
             </div>
           )}
 
-          <Field label="Ghi chú phiếu xuất">
-            <input
-              value={createNote}
-              onChange={(event) => setCreateNote(event.target.value)}
-              className="app-input w-full rounded-xl px-3 py-2 text-sm"
-              placeholder="Ghi chú nội bộ nếu cần"
-            />
-          </Field>
+          <div className="space-y-4 border-t pt-4" style={{ borderColor: 'var(--color-border)' }}>
+            <Field label="Ghi chú phiếu xuất">
+              <input
+                value={createNote}
+                onChange={(event) => setCreateNote(event.target.value)}
+                className="app-input w-full rounded-xl px-3 py-2 text-sm"
+                placeholder="Ghi chú nội bộ nếu cần"
+              />
+            </Field>
 
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={() => void createVoucher()}
-              disabled={pending}
-              className="app-primary rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
-            >
-              {pending ? 'Đang tạo...' : 'Lập phiếu xuất'}
-            </button>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void createVoucher()}
+                disabled={pending}
+                className="app-primary rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              >
+                {pending ? 'Đang tạo...' : 'Lập phiếu xuất'}
+              </button>
+            </div>
           </div>
             </>
           )}
@@ -2554,11 +2805,15 @@ export function PhieuXuatPageClient(props: {
             return (
               <div
                 key={`mobile-${row.voucherId}`}
-                className="rounded-2xl border p-3"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  backgroundColor: 'white',
-                }}
+                className={detailPage ? 'bg-white' : 'rounded-2xl border p-3'}
+                style={
+                  detailPage
+                    ? undefined
+                    : {
+                        borderColor: 'var(--color-border)',
+                        backgroundColor: 'white',
+                      }
+                }
               >
                 <div className="flex items-start gap-3">
                   {!detailPage ? (
@@ -2570,15 +2825,14 @@ export function PhieuXuatPageClient(props: {
                       className="mt-1"
                     />
                   ) : null}
-                  <div className="min-w-0 flex-1 space-y-2">
+                  <div className={`min-w-0 flex-1 ${detailPage ? 'space-y-4' : 'space-y-2'}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         {detailPage ? (
-                          <div className="text-left text-lg font-semibold">{row.maPhieu}</div>
+                          <div className="text-left text-lg font-medium">{row.maPhieu}</div>
                         ) : (
                           <Link
                             href={`/don-hang/phieu-xuat/${row.voucherId}?from=list`}
-                            prefetch={false}
                             className="text-left text-lg font-semibold underline-offset-2 hover:underline"
                           >
                             {row.maPhieu}
@@ -2589,7 +2843,7 @@ export function PhieuXuatPageClient(props: {
                         </div>
                       </div>
                       <div className="flex flex-col items-end gap-2">
-                        <div className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold" style={{ backgroundColor: 'color-mix(in srgb, white 92%, var(--color-primary) 4%)' }}>
+                        <div className="shrink-0 rounded-full px-3 py-1 text-xs font-medium" style={{ backgroundColor: 'color-mix(in srgb, white 92%, var(--color-primary) 4%)' }}>
                           {formatCompactStatusLabel(row.status)}
                         </div>
                         {rowHasReturnRequest ? (
@@ -2607,7 +2861,7 @@ export function PhieuXuatPageClient(props: {
                       </div>
                     </div>
 
-                    <div className="space-y-1 p-1 text-sm">
+                    <div className={`text-sm ${detailPage ? 'space-y-2' : 'space-y-1 p-1'}`}>
                       {detailPage && !canConfirm && !mobileReturnMode ? null : (
                         <div>
                           <div className="font-medium">{row.customerName || '-'}</div>
@@ -2663,6 +2917,55 @@ export function PhieuXuatPageClient(props: {
                     {expanded ? (
                       detail ? (
                         canConfirm ? (
+                        detailPage && !mobileShipmentPanelOpen ? (
+                        <div className="space-y-0 border-t" style={{ borderColor: 'var(--color-border)' }}>
+                          <div className="pt-4">
+                            <div className="text-base font-semibold">Tổng quan phiếu</div>
+                            <div className="mt-2 space-y-1 text-sm">
+                              <div><span className="text-[var(--color-muted)]">Mã phiếu</span> <span className="font-semibold">{detail.maPhieu}</span></div>
+                              <div>
+                                <span className="text-[var(--color-muted)]">Khách hàng / đơn hàng</span>{' '}
+                                <span className="font-semibold">{detail.customerName || '-'} / {detail.orderLabel || detail.projectName || '-'}</span>
+                              </div>
+                              <div><span className="text-[var(--color-muted)]">Trạng thái hiện tại</span> <span className="font-semibold">{formatStatusLabel(detail.status)}</span></div>
+                            </div>
+                          </div>
+
+                          <div
+                            className="border-t pt-4 text-sm cursor-pointer"
+                            style={{ borderColor: 'var(--color-border)' }}
+                            onClick={() => {
+                              setMobileShipmentPanelOpen(true)
+                              setShipmentInputMode('SELECT')
+                              setMobileShipmentStep('PICK')
+                            }}
+                          >
+                            <div className="text-base font-bold text-[var(--color-primary)]">Xuất hàng</div>
+                            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                              <span><span className="text-[var(--color-muted)]">Đề nghị xuất</span> <span className="font-semibold">{formatNumber(detail.requestedQtyTotal)}</span></span>
+                              <span><span className="text-[var(--color-muted)]">Đã quét</span> <span className="font-semibold">{formatNumber(scannedShipmentSerials.length)}</span></span>
+                              <span><span className="text-[var(--color-muted)]">Còn thiếu</span> <span className="font-semibold">{formatNumber(Math.max(0, detail.requestedQtyTotal - scannedShipmentSerials.length))}</span></span>
+                            </div>
+                            <div className="mt-3 text-sm font-semibold">Danh sách serial đã quét</div>
+                            <div className="mt-2 space-y-2">
+                              {scannedShipmentSerials.length ? (
+                                scannedShipmentSerials.map((item) => (
+                                  <div
+                                    key={`mobile-summary-picked-${item.serialId}`}
+                                    className="border-t py-2 text-sm"
+                                    style={{ borderColor: 'var(--color-border)' }}
+                                  >
+                                    <div className="font-mono">{item.serialCode}</div>
+                                    <div className="mt-1 text-xs text-[var(--color-muted)]">{item.itemLabel}</div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-sm text-[var(--color-muted)]">Chưa có serial đã quét.</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        ) : (
                         <div className={`space-y-3 ${mobileShipmentStep === 'PICK' ? 'pb-24' : 'pb-28'}`}>
                           {mobileShipmentStep === 'PICK' ? (
                             <div className="space-y-2.5">
@@ -2928,8 +3231,8 @@ export function PhieuXuatPageClient(props: {
                                       </div>
                                       {shipmentScannerOpen || shipmentScannerStarting ? (
                                         <div className="overflow-hidden rounded-2xl" style={{ backgroundColor: '#0f172a' }}>
-                                          <video
-                                            ref={shipmentVideoRef}
+                                      <video
+                                        ref={shipmentVideoCompactRef}
                                             className="h-[220px] w-full object-cover"
                                             muted
                                             playsInline
@@ -3068,6 +3371,7 @@ export function PhieuXuatPageClient(props: {
                             )}
                           </div>
                         </div>
+                        )
                         ) : canProcessReturn && returnPanelOpen && detail.returnRequest?.status === 'PENDING' ? (
                         <div className={`space-y-3 ${mobileReturnStep === 'PICK' ? 'pb-24' : 'pb-28'}`}>
                           {mobileReturnStep === 'PICK' ? (
@@ -3184,8 +3488,8 @@ export function PhieuXuatPageClient(props: {
                                   {returnScannerOpen || returnScannerStarting ? (
                                     <div className="overflow-hidden rounded-2xl" style={{ backgroundColor: '#0f172a' }}>
                                       <video
-                                        ref={returnVideoRef}
-                                        className="h-[220px] w-full object-cover"
+                                        ref={returnVideoCompactRef}
+                                        className="h-[220px] w-full object-contain"
                                         muted
                                         playsInline
                                         autoPlay
@@ -3436,133 +3740,142 @@ export function PhieuXuatPageClient(props: {
                           </div>
                         </div>
                         ) : (
-                          <div className="space-y-3">
-                            <div className="rounded-2xl p-3.5 space-y-3" style={{ backgroundColor: 'color-mix(in srgb, white 95%, var(--color-primary) 3%)' }}>
-                              <div>
-                                <div className="text-base font-semibold">Tổng quan phiếu</div>
-                                <div className="mt-2 space-y-1 text-sm">
-                                  <div><span className="text-[var(--color-muted)]">Mã phiếu</span> <span className="font-semibold">{detail.maPhieu}</span></div>
-                                  <div>
-                                    <span className="text-[var(--color-muted)]">Khách hàng / đơn hàng</span>{' '}
-                                    <span className="font-semibold">{detail.customerName || '-'} / {detail.orderLabel || detail.projectName || '-'}</span>
-                                  </div>
-                                  <div><span className="text-[var(--color-muted)]">Trạng thái hiện tại</span> <span className="font-semibold">{formatStatusLabel(detail.status)}</span></div>
-                                </div>
+                          <div className="space-y-0 border-t" style={{ borderColor: 'var(--color-border)' }}>
+                            <div className="pt-4">
+                              <div className="text-base font-semibold">Tổng quan phiếu</div>
+                              <div className="mt-2 space-y-1.5 text-sm">
+                                <div className="font-normal">{detail.maPhieu}</div>
+                                <div className="font-normal">{detail.customerName || '-'} / {detail.orderLabel || detail.projectName || '-'}</div>
+                                <div className="font-normal">{formatStatusLabel(detail.status)}</div>
                               </div>
-
-                              <div className="rounded-xl px-3 py-3 text-sm" style={{ backgroundColor: 'white' }}>
-                                <div className="text-base font-semibold">Xuất hàng</div>
-                                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                                  <span><span className="text-[var(--color-muted)]">Đề nghị xuất</span> <span className="font-semibold">{formatNumber(detail.requestedQtyTotal)}</span></span>
-                                  <span><span className="text-[var(--color-muted)]">Đã xuất</span> <span className="font-semibold">{formatNumber(detail.confirmedSerials.length > 0 ? detail.confirmedSerials.length : detail.actualQtyTotal)}</span></span>
-                                </div>
-                                <div className="mt-3 text-sm font-semibold">Danh sách serial đã xuất</div>
-                                <div className="mt-2 space-y-2">
-                                  {detail.confirmedSerials.length ? (
-                                    detail.confirmedSerials.map((item) => (
-                                      <div
-                                        key={`mobile-confirmed-${item.serialId}`}
-                                        className="rounded-xl px-3 py-2 text-sm"
-                                        style={{ backgroundColor: 'color-mix(in srgb, white 96%, var(--color-primary) 2%)' }}
-                                      >
-                                        <div className="font-mono">{item.serialCode}</div>
-                                      </div>
-                                    ))
-                                  ) : (
-                                    <div className="text-sm text-[var(--color-muted)]">Chưa có serial đã xuất.</div>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="rounded-xl px-3 py-3 text-sm" style={{ backgroundColor: 'white' }}>
-                                <div className="text-base font-semibold">Trả hàng</div>
-                                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                                  <span><span className="text-[var(--color-muted)]">Đề nghị trả</span> <span className="font-semibold">{formatNumber(returnRequestedQtyTotal)}</span></span>
-                                  <span><span className="text-[var(--color-muted)]">Đã trả</span> <span className="font-semibold">{formatNumber(detail.returnedSerials.length)}</span></span>
-                                </div>
-                                <div className="mt-3 text-sm font-semibold">Danh sách serial đã trả</div>
-                                <div className="mt-2 space-y-2">
-                                  {detail.returnedSerials.length ? (
-                                    detail.returnedSerials.map((item) => (
-                                      <div
-                                        key={`mobile-returned-${item.serialId}`}
-                                        className="rounded-xl px-3 py-2 text-sm"
-                                        style={{ backgroundColor: 'color-mix(in srgb, white 96%, var(--color-primary) 2%)' }}
-                                      >
-                                        <div className="font-mono">{item.serialCode}</div>
-                                        <div className="mt-1 text-xs text-[var(--color-muted)]">
-                                          {formatReturnResolutionLabel(item.resolutionStatus)}
-                                        </div>
-                                      </div>
-                                    ))
-                                  ) : (
-                                    <div className="text-sm text-[var(--color-muted)]">Chưa có serial đã trả.</div>
-                                  )}
-                                </div>
-                              </div>
-
-                              {mobileCanEditReturnRequest ? (
-                                <div className="rounded-xl px-3 py-3 text-sm" style={{ backgroundColor: 'white' }}>
-                                  <div className="text-base font-semibold">Đề nghị trả hàng</div>
-                                  <div className="mt-1 text-sm text-[var(--color-muted)]">
-                                    KTBH chỉ nhập tổng số đoạn cần trả. Chưa chọn serial ở bước này. Khi hàng về kho, Thủ kho sẽ scan hoặc chọn mã đã xuất để hệ thống tự xác định đúng đoạn.
-                                  </div>
-                                  <div
-                                    className="mt-3 rounded-xl px-3 py-3"
-                                    style={{ backgroundColor: 'color-mix(in srgb, white 96%, var(--color-primary) 2%)' }}
-                                  >
-                                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                                      <span><span className="text-[var(--color-muted)]">Đã xuất</span> <span className="font-semibold">{formatNumber(detail.confirmedSerials.length > 0 ? detail.confirmedSerials.length : detail.actualQtyTotal)}</span></span>
-                                      <span><span className="text-[var(--color-muted)]">Có thể đề nghị</span> <span className="font-semibold">{formatNumber(hydratedReturnCapacity)}</span></span>
-                                    </div>
-                                    <div className="mt-3">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        max={hydratedReturnCapacity}
-                                        value={returnRequestQty}
-                                        onChange={(event) => setReturnRequestQty(event.target.value)}
-                                        disabled={!mobileCanEditReturnRequest}
-                                        className="app-input w-full rounded-xl px-3 py-2 text-right text-sm disabled:opacity-60"
-                                        placeholder="Nhập tổng số đoạn cần trả"
-                                      />
-                                    </div>
-                                  </div>
-                                  {mobileReturnRequest ? (
-                                    <div
-                                      className="mt-3 rounded-2xl border px-4 py-3 text-sm"
-                                      style={{
-                                        borderColor: 'color-mix(in srgb, var(--color-primary) 24%, white)',
-                                        backgroundColor: 'color-mix(in srgb, var(--color-primary) 8%, white)',
-                                        color: 'var(--color-primary)',
-                                      }}
-                                    >
-                                      {mobileReturnRequest.status === 'PENDING'
-                                        ? 'Đã có đề nghị trả hàng đang chờ Thủ kho xử lý.'
-                                        : 'Đề nghị trả hàng gần nhất đã được Thủ kho xử lý.'}
-                                    </div>
-                                  ) : null}
-                                  <div className="mt-3 space-y-3">
-                                    <Field label="Ghi chú đề nghị trả hàng">
-                                      <input
-                                        value={returnRequestNote}
-                                        onChange={(event) => setReturnRequestNote(event.target.value)}
-                                        className="app-input w-full rounded-xl px-3 py-2 text-sm"
-                                        placeholder="Ghi chú nếu khách báo không nhận hàng"
-                                      />
-                                    </Field>
-                                    <button
-                                      type="button"
-                                      onClick={() => void submitReturnRequest()}
-                                      disabled={pending}
-                                      className="app-primary w-full rounded-xl px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
-                                    >
-                                      {pending ? 'Đang gửi đề nghị...' : 'Gửi đề nghị trả hàng'}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : null}
                             </div>
+
+                            <div className="border-t pt-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+                              <div className="text-base font-semibold">Xuất hàng</div>
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                                <span><span className="text-[var(--color-muted)]">Đề nghị xuất</span> <span className="font-semibold">{formatNumber(detail.requestedQtyTotal)}</span></span>
+                                <span><span className="text-[var(--color-muted)]">Đã xuất</span> <span className="font-semibold">{formatNumber(detail.confirmedSerials.length > 0 ? detail.confirmedSerials.length : detail.actualQtyTotal)}</span></span>
+                              </div>
+                              <div className="mt-3 text-sm font-medium">Danh sách serial đã xuất</div>
+                              <div className="mt-2 space-y-2">
+                                {detail.confirmedSerials.length ? (
+                                  detail.confirmedSerials.map((item) => (
+                                    <div
+                                      key={`mobile-confirmed-${item.serialId}`}
+                                      className="border-t py-2 text-sm"
+                                      style={{ borderColor: 'var(--color-border)' }}
+                                    >
+                                      <div className="font-mono">{item.serialCode}</div>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="text-sm text-[var(--color-muted)]">Chưa có serial đã xuất.</div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div
+                              className={`border-t pt-4 text-sm ${canProcessReturn && detail.returnRequest?.status === 'PENDING' ? 'cursor-pointer' : ''}`}
+                              style={{ borderColor: 'var(--color-border)' }}
+                              onClick={() => {
+                                if (!(canProcessReturn && detail.returnRequest?.status === 'PENDING')) return
+                                setReturnPanelVoucherId(detail.voucherId)
+                                setReturnInputMode('SELECT')
+                                setMobileReturnStep('PICK')
+                              }}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div
+                                    className={`text-base ${canProcessReturn && detail.returnRequest?.status === 'PENDING' ? 'font-bold text-[var(--color-primary)]' : 'font-semibold'}`}
+                                  >
+                                    Trả hàng
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                                    <span><span className="text-[var(--color-muted)]">Đề nghị trả</span> <span className="font-semibold">{formatNumber(returnRequestedQtyTotal)}</span></span>
+                                    <span><span className="text-[var(--color-muted)]">Đã trả</span> <span className="font-semibold">{formatNumber(detail.returnedSerials.length)}</span></span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-3 text-sm font-medium">Danh sách serial đã trả</div>
+                              <div className="mt-2 space-y-2">
+                                {detail.returnedSerials.length ? (
+                                  detail.returnedSerials.map((item) => (
+                                    <div
+                                      key={`mobile-returned-${item.serialId}`}
+                                      className="border-t py-2 text-sm"
+                                      style={{ borderColor: 'var(--color-border)' }}
+                                    >
+                                      <div className="font-mono">{item.serialCode}</div>
+                                      <div className="mt-1 text-xs text-[var(--color-muted)]">
+                                        {formatReturnResolutionLabel(item.resolutionStatus)}
+                                      </div>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="text-sm text-[var(--color-muted)]">Chưa có serial đã trả.</div>
+                                )}
+                              </div>
+                            </div>
+
+                            {mobileCanEditReturnRequest ? (
+                              <div className="border-t pt-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+                                <div className="text-base font-semibold">Đề nghị trả hàng</div>
+                                <div className="mt-1 text-sm text-[var(--color-muted)]">
+                                  KTBH chỉ nhập tổng số đoạn cần trả. Chưa chọn serial ở bước này. Khi hàng về kho, Thủ kho sẽ scan hoặc chọn mã đã xuất để hệ thống tự xác định đúng đoạn.
+                                </div>
+                                <div className="mt-3 border-t pt-3" style={{ borderColor: 'var(--color-border)' }}>
+                                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+                                    <span><span className="text-[var(--color-muted)]">Đã xuất</span> <span className="font-semibold">{formatNumber(detail.confirmedSerials.length > 0 ? detail.confirmedSerials.length : detail.actualQtyTotal)}</span></span>
+                                    <span><span className="text-[var(--color-muted)]">Có thể đề nghị</span> <span className="font-semibold">{formatNumber(hydratedReturnCapacity)}</span></span>
+                                  </div>
+                                  <div className="mt-3">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={hydratedReturnCapacity}
+                                      value={returnRequestQty}
+                                      onChange={(event) => setReturnRequestQty(event.target.value)}
+                                      disabled={!mobileCanEditReturnRequest}
+                                      className="app-input w-full rounded-xl px-3 py-2 text-right text-sm disabled:opacity-60"
+                                      placeholder="Nhập tổng số đoạn cần trả"
+                                    />
+                                  </div>
+                                </div>
+                                {mobileReturnRequest ? (
+                                  <div
+                                    className="mt-3 rounded-2xl border px-4 py-3 text-sm"
+                                    style={{
+                                      borderColor: 'color-mix(in srgb, var(--color-primary) 24%, white)',
+                                      backgroundColor: 'color-mix(in srgb, var(--color-primary) 8%, white)',
+                                      color: 'var(--color-primary)',
+                                    }}
+                                  >
+                                    {mobileReturnRequest.status === 'PENDING'
+                                      ? 'Đã có đề nghị trả hàng đang chờ Thủ kho xử lý.'
+                                      : 'Đề nghị trả hàng gần nhất đã được Thủ kho xử lý.'}
+                                  </div>
+                                ) : null}
+                                <div className="mt-3 space-y-3">
+                                  <Field label="Ghi chú đề nghị trả hàng">
+                                    <input
+                                      value={returnRequestNote}
+                                      onChange={(event) => setReturnRequestNote(event.target.value)}
+                                      className="app-input w-full rounded-xl px-3 py-2 text-sm"
+                                      placeholder="Ghi chú nếu khách báo không nhận hàng"
+                                    />
+                                  </Field>
+                                  <button
+                                    type="button"
+                                    onClick={() => void submitReturnRequest()}
+                                    disabled={pending}
+                                    className="app-primary w-full rounded-xl px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                                  >
+                                    {pending ? 'Đang gửi đề nghị...' : 'Gửi đề nghị trả hàng'}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                         )
                       ) : null
@@ -3616,6 +3929,10 @@ export function PhieuXuatPageClient(props: {
                 const shouldShowReturnSection = returnPanelOpen || Boolean(returnRequest)
                 const canEditReturnRequest =
                   canRequestReturn && hydratedReturnCapacity > 0 && (!returnRequest || returnRequest.status === 'COMPLETED')
+                const canSoftReopenReturnRequest =
+                  canRequestReturn && Boolean(detail?.canSoftReopenReturnRequest)
+                const canAdminReopenShipment =
+                  adminViewer && Boolean(detail?.canAdminReopenShipment)
                 const confirmedCountByLine = new Map<string, number>()
                 for (const item of confirmedSerials) {
                   confirmedCountByLine.set(item.lineId, (confirmedCountByLine.get(item.lineId) ?? 0) + 1)
@@ -3679,7 +3996,6 @@ export function PhieuXuatPageClient(props: {
                         <td className="px-4 py-4 font-semibold">
                           <Link
                             href={`/don-hang/phieu-xuat/${row.voucherId}?from=list`}
-                            prefetch={false}
                             className="text-left font-semibold underline-offset-2 hover:underline"
                           >
                             {row.maPhieu}
@@ -3788,8 +4104,8 @@ export function PhieuXuatPageClient(props: {
 
                                           <div className="space-y-3">
                                             <div className="overflow-hidden rounded-2xl" style={{ backgroundColor: '#0f172a' }}>
-                                              <video
-                                                ref={shipmentVideoRef}
+                                                  <video
+                                                    ref={shipmentVideoDetailRef}
                                                 className="h-[360px] w-full object-cover"
                                                 muted
                                                 playsInline
@@ -4072,6 +4388,30 @@ export function PhieuXuatPageClient(props: {
                                 </div>
                               ) : null}
 
+                            {canAdminReopenShipment ? (
+                              <div
+                                className={detailPage ? 'border-t py-4' : 'rounded-2xl border px-4 py-3'}
+                                style={detailPage ? { borderColor: 'var(--color-border)' } : { borderColor: 'var(--color-border)' }}
+                              >
+                                <div className="flex flex-wrap items-end justify-between gap-3">
+                                  <div className="space-y-1">
+                                    <div className="text-sm font-semibold">Admin mở lại phiếu xuất</div>
+                                    <div className="text-sm text-[var(--color-muted)]">
+                                      Chỉ mở lại khi phiếu đã xuất nhưng chưa phát sinh đề nghị trả hoặc xử lý trả hàng.
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => void reopenConfirmedShipment()}
+                                    disabled={pending}
+                                    className="app-outline rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                                  >
+                                    {pending ? 'Đang mở lại...' : 'Mở lại phiếu'}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+
                             {(canRequestReturn || canProcessReturn) && shouldShowReturnSection ? (
                               <div className={detailPage ? 'space-y-4 border-b py-4' : 'space-y-4'} style={detailPage ? { borderColor: 'var(--color-border)' } : undefined}>
                                 <div
@@ -4208,6 +4548,18 @@ export function PhieuXuatPageClient(props: {
                                         ? 'Đề nghị trả hàng đang chờ Thủ kho xử lý.'
                                         : 'Đề nghị trả hàng gần nhất đã được Thủ kho xử lý.'}
                                     </div>
+                                    {canSoftReopenReturnRequest ? (
+                                      <div className="flex justify-end">
+                                        <button
+                                          type="button"
+                                          onClick={() => void reopenReturnRequest()}
+                                          disabled={pending}
+                                          className="app-outline rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                                        >
+                                          {pending ? 'Đang mở lại...' : 'Mở lại đề nghị'}
+                                        </button>
+                                      </div>
+                                    ) : null}
                                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--color-border)' }}>
                                       <div className="text-sm font-semibold">Chi tiết đề nghị</div>
                                       <div className="mt-2 text-sm text-[var(--color-muted)]">
@@ -4244,6 +4596,16 @@ export function PhieuXuatPageClient(props: {
                                           ) : null}
                                         </div>
                                       </div>
+                                      {canSoftReopenReturnRequest ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => void reopenReturnRequest()}
+                                          disabled={pending}
+                                          className="app-outline rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
+                                        >
+                                          {pending ? 'Đang mở lại...' : 'Mở lại đề nghị'}
+                                        </button>
+                                      ) : null}
                                     </div>
 
                                     {returnRequest?.status === 'PENDING' ? (
@@ -4441,8 +4803,8 @@ export function PhieuXuatPageClient(props: {
                                                 <div className="space-y-2">
                                                   <div className="overflow-hidden rounded-2xl border" style={{ borderColor: 'var(--color-border)', backgroundColor: '#0f172a' }}>
                                                     <video
-                                                      ref={returnVideoRef}
-                                                      className="h-[260px] w-full object-cover"
+                                                      ref={returnVideoDetailRef}
+                                                      className="h-[260px] w-full object-contain"
                                                       muted
                                                       playsInline
                                                       autoPlay
@@ -4672,6 +5034,15 @@ function normalizeCode(value: string) {
   return String(value || '').trim().toUpperCase()
 }
 
+function extractSerialCodeFromQrValue(value: string) {
+  const normalized = normalizeCode(value)
+  if (!normalized) return ''
+  const directMatch = normalized.match(/(?:LO|ODK)-[A-Z0-9-]+-\d{3}\b/u)
+  if (directMatch) return normalizeCode(directMatch[0])
+  const compactParts = normalized.split(/[\s|,;\t\r\n]+/u).map((item) => normalizeCode(item)).filter(Boolean)
+  return compactParts.find((item) => /^(?:LO|ODK)-[A-Z0-9-]+-\d{3}$/u.test(item)) || normalized
+}
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat('vi-VN', {
     minimumFractionDigits: 0,
@@ -4786,11 +5157,11 @@ function Field(props: { label: string; children: React.ReactNode; className?: st
   )
 }
 
-function Info(props: { label: string; value: string }) {
+function InlineInfo(props: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border px-4 py-3" style={{ borderColor: 'var(--color-border)' }}>
-      <div className="text-sm text-[var(--color-muted)]">{props.label}</div>
-      <div className="mt-1 font-semibold">{props.value}</div>
+    <div className="border-b pb-3" style={{ borderColor: 'var(--color-border)' }}>
+      <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--color-muted)]">{props.label}</div>
+      <div className="mt-2 text-sm">{props.value}</div>
     </div>
   )
 }
@@ -4834,7 +5205,6 @@ function ShipmentAvailabilityCell(props: {
               <Link
                 key={`${item.voucherId}-${item.maPhieu}`}
                 href={`/don-hang/phieu-xuat/${item.voucherId}`}
-                prefetch={false}
                 className="block rounded-xl border px-3 py-2 transition hover:bg-black/[0.03]"
                 style={{ borderColor: 'var(--color-border)' }}
               >

@@ -13,13 +13,6 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 3 }).format(Number(value || 0))
 }
 
-function formatDate(value: string) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('vi-VN').format(date)
-}
-
 function printHref(serialCode: string) {
   const params = new URLSearchParams()
   params.set('serial_codes', serialCode)
@@ -234,7 +227,7 @@ export function SerialReprintSearchPanel({
                 >
                   <td className="px-4 py-4 font-semibold break-all">{candidate.serialCode}</td>
                   <td className="px-4 py-4 text-[var(--color-muted)]">
-                    {candidate.loaiCoc} · {candidate.tenDoan} · {formatNumber(candidate.chieuDaiM)}m · {formatDate(candidate.productionDate)} · #
+                    {(candidate.maCoc || candidate.loaiCoc)} · {candidate.tenDoan} · {formatNumber(candidate.chieuDaiM)}m · #
                     {String(candidate.displaySequence || 0).padStart(3, '0')}
                   </td>
                   {onSelectSerial ? null : (

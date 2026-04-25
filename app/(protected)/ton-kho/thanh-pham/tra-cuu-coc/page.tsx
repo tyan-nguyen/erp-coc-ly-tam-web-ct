@@ -74,31 +74,28 @@ export default async function PileTemplateLookupPage(props: { searchParams: Sear
   const templatePresets = buildTemplatePresets((templateRows ?? []) as Array<Record<string, unknown>>, nvlMap)
 
   return (
-    <div className="space-y-6">
-      <section className="app-surface rounded-2xl p-6">
-        <div className="inline-flex rounded-full px-3 py-1 text-xs font-semibold tracking-[0.18em] uppercase app-primary-soft">
-          Tra cứu cọc
-        </div>
-        <h1 className="mt-4 text-2xl font-bold">Tra cứu mã cọc theo thông số</h1>
+    <div className="app-surface overflow-hidden rounded-2xl">
+      <section className="px-6 py-6">
+        <h1 className="text-2xl font-bold">Tra cứu mã cọc theo thông số</h1>
       </section>
 
-      <section className="app-surface rounded-2xl p-6">
+      <section className="border-t px-6 py-6" style={{ borderColor: 'var(--color-border)' }}>
         <PileTemplateLookupForm filters={pageData.filters} steelGroups={steelGroups} accessoryGroups={accessoryGroups} templatePresets={templatePresets} />
       </section>
 
       {!pageData.hasQuery ? (
-        <section className="app-surface rounded-2xl p-6">
+        <section className="border-t px-6 py-6" style={{ borderColor: 'var(--color-border)' }}>
           <h2 className="text-lg font-semibold">Cách dùng nhanh</h2>
-          <div className="app-muted mt-3 grid gap-3 text-sm md:grid-cols-3">
-            <div className="rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
+          <div className="app-muted mt-4 grid divide-y text-sm md:grid-cols-3 md:divide-x md:divide-y-0" style={{ borderColor: 'var(--color-border)' }}>
+            <div className="py-4 md:pr-5">
               <p className="font-semibold text-[var(--color-foreground)]">1. Từ bản vẽ khách đưa</p>
               <p className="mt-2">Nhập cường độ, mác thép, ĐK ngoài, thành cọc, chiều dài để ra mã khớp nhất và các loại gần giống.</p>
             </div>
-            <div className="rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
+            <div className="py-4 md:px-5">
               <p className="font-semibold text-[var(--color-foreground)]">2. Từ mã cọc đang có</p>
               <p className="mt-2">Gõ trực tiếp loại cọc để xem lại thông số kỹ thuật cơ bản và tồn theo chiều dài đang hỏi.</p>
             </div>
-            <div className="rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
+            <div className="py-4 md:pl-5">
               <p className="font-semibold text-[var(--color-foreground)]">3. Gợi ý thay thế</p>
               <p className="mt-2">Nếu không có hàng đúng 100%, hệ thống sẽ liệt kê loại gần giống và ghi rõ khác nhau ở đâu để mình trao đổi lại với khách.</p>
             </div>
@@ -107,26 +104,24 @@ export default async function PileTemplateLookupPage(props: { searchParams: Sear
       ) : null}
 
       {pageData.hasQuery ? (
-        <section className="space-y-6">
-          <div className="space-y-6">
-            <ResultSection
-              title="Khớp trực tiếp"
-              emptyMessage="Chưa có loại cọc nào khớp hoàn toàn với thông số đang nhập."
-              rows={pageData.exactMatches}
-              filters={pageData.filters}
-              tone="primary"
-              returnTo={returnTo}
-            />
-            <ResultSection
-              title="Loại gần giống để cân nhắc"
-              emptyMessage="Chưa tìm được loại đủ gần để gợi ý thay thế."
-              rows={pageData.nearMatches}
-              filters={pageData.filters}
-              tone="default"
-              returnTo={returnTo}
-            />
-          </div>
-        </section>
+        <>
+          <ResultSection
+            title="Khớp trực tiếp"
+            emptyMessage="Chưa có loại cọc nào khớp hoàn toàn với thông số đang nhập."
+            rows={pageData.exactMatches}
+            filters={pageData.filters}
+            tone="primary"
+            returnTo={returnTo}
+          />
+          <ResultSection
+            title="Loại gần giống để cân nhắc"
+            emptyMessage="Chưa tìm được loại đủ gần để gợi ý thay thế."
+            rows={pageData.nearMatches}
+            filters={pageData.filters}
+            tone="default"
+            returnTo={returnTo}
+          />
+        </>
       ) : null}
     </div>
   )
@@ -148,16 +143,12 @@ function ResultSection({
   returnTo: string
 }>) {
   return (
-    <section className="app-surface rounded-2xl p-6">
+    <section className="border-t px-6 py-6" style={{ borderColor: 'var(--color-border)' }}>
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold">{title}</h2>
         <span
-          className="rounded-full px-3 py-1 text-xs font-semibold"
+          className="text-xs font-semibold uppercase tracking-[0.18em]"
           style={{
-            backgroundColor:
-              tone === 'primary'
-                ? 'color-mix(in srgb, var(--color-primary) 10%, white)'
-                : 'color-mix(in srgb, var(--color-border) 60%, white)',
             color: tone === 'primary' ? 'var(--color-primary)' : 'var(--color-muted)',
           }}
         >
@@ -166,37 +157,21 @@ function ResultSection({
       </div>
 
       {rows.length === 0 ? (
-        <div className="app-muted mt-4 rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="app-muted mt-4 border-t py-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
           {emptyMessage}
         </div>
       ) : (
-        <div className="mt-4 space-y-4">
+        <div className="mt-4 divide-y" style={{ borderColor: 'var(--color-border)' }}>
           {rows.map((row) => (
             <article
               key={row.templateId}
-              className="rounded-2xl border p-5"
-              style={{
-                borderColor:
-                  tone === 'primary'
-                    ? 'color-mix(in srgb, var(--color-primary) 20%, var(--color-border))'
-                    : 'var(--color-border)',
-                backgroundColor:
-                  tone === 'primary'
-                    ? 'color-mix(in srgb, var(--color-primary) 4%, white)'
-                    : 'var(--color-surface)',
-              }}
+              className="py-5 first:pt-0 last:pb-0"
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="text-xl font-bold">{row.loaiCoc}</h3>
                   <div
-                    className="mt-3 flex flex-wrap gap-x-4 gap-y-2 rounded-2xl px-4 py-3 text-[15px] font-bold tracking-[0.01em] text-[var(--color-foreground)]"
-                    style={{
-                      backgroundColor:
-                        tone === 'primary'
-                          ? 'color-mix(in srgb, var(--color-primary) 9%, white)'
-                          : 'color-mix(in srgb, var(--color-border) 35%, white)',
-                    }}
+                    className="app-muted mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm"
                   >
                     <span>Mã nội bộ: {row.maCoc || '-'}</span>
                     <span>Nguồn: {row.sourceLabel}</span>
@@ -204,16 +179,15 @@ function ResultSection({
                   </div>
                 </div>
                 {row.differenceLabels.length ? (
-                  <div className="rounded-2xl border px-3 py-2 text-xs font-semibold" style={{ borderColor: 'var(--color-border)' }}>
+                  <div className="app-muted text-xs font-semibold uppercase tracking-[0.16em]">
                     {row.differenceLabels.length === 1 && row.differenceLabels[0] === 'Cần kiểm tra phụ kiện'
                       ? 'Cần kiểm tra phụ kiện'
                       : `${row.differenceLabels.length} điểm khác`}
                   </div>
                 ) : (
                   <div
-                    className="rounded-2xl px-3 py-2 text-xs font-semibold"
+                    className="text-xs font-semibold uppercase tracking-[0.16em]"
                     style={{
-                      backgroundColor: 'color-mix(in srgb, var(--color-primary) 10%, white)',
                       color: 'var(--color-primary)',
                     }}
                   >
@@ -225,7 +199,7 @@ function ResultSection({
               {returnTo ? (
                 <div className="mt-4">
                   <Link
-                    href={buildReturnHref(returnTo, row.loaiCoc)}
+                    href={buildReturnHref(returnTo, row.templateId || row.maCoc || row.loaiCoc)}
                     className="app-primary inline-flex rounded-xl px-4 py-2 text-sm font-semibold"
                   >
                     Dùng mã này
@@ -233,7 +207,7 @@ function ResultSection({
                 </div>
               ) : null}
 
-              <div className="mt-4 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-5">
+              <div className="mt-5 grid gap-x-8 gap-y-5 text-sm md:grid-cols-2 xl:grid-cols-5">
                 <SpecBox label="Cường độ" value={row.cuongDo} />
                 <SpecBox label="Mác thép" value={row.macThep} />
                 <SpecBox label="ĐK ngoài" value={`${row.doNgoai} mm`} />
@@ -241,9 +215,9 @@ function ResultSection({
                 <SpecBox label="Mác BT" value={row.macBeTong || '-'} />
               </div>
 
-              <div className="mt-4 rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+              <div className="mt-5 border-t pt-5 text-sm" style={{ borderColor: 'var(--color-border)' }}>
                 <p className="font-semibold">Thông số cọc đầy đủ</p>
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="mt-4 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-4">
                   <SpecBox label="Khối lượng" value={row.khoiLuongKgMd !== null ? `${row.khoiLuongKgMd} kg/md` : '-'} />
                   <SpecBox label="Thép PC" value={row.steelLabels.pc || '-'} />
                   <SpecBox label="Số thanh PC" value={row.pcNos !== null ? String(row.pcNos) : '-'} />
@@ -260,9 +234,9 @@ function ResultSection({
               </div>
 
               {hasAccessoryLabels(row) ? (
-                <div className="mt-4 rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+                <div className="mt-5 border-t pt-5 text-sm" style={{ borderColor: 'var(--color-border)' }}>
                   <p className="font-semibold">Phụ kiện đang gắn với loại này</p>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="mt-4 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-4">
                     <SpecBox label="Mặt bích" value={row.accessoryLabels.matBich || '-'} />
                     <SpecBox label="Măng xông" value={row.accessoryLabels.mangXong || '-'} />
                     <SpecBox label="Mũi cọc" value={row.accessoryLabels.muiCoc || '-'} />
@@ -272,7 +246,7 @@ function ResultSection({
               ) : null}
 
               {row.differenceLabels.length ? (
-                <div className="mt-4 rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+                <div className="mt-5 border-t pt-5 text-sm" style={{ borderColor: 'var(--color-border)' }}>
                   <p className="font-semibold">Điểm khác so với thông số đang hỏi</p>
                   <ul className="app-muted mt-2 space-y-1">
                     {row.differenceLabels.map((label) => (
@@ -282,9 +256,9 @@ function ResultSection({
                 </div>
               ) : null}
 
-              <div className="mt-4 grid gap-4">
+              <div className="mt-5 grid gap-4">
                 <ExpandableTechSection title="Thông số kỹ thuật">
-                  <div className="overflow-hidden rounded-2xl border" style={{ borderColor: 'color-mix(in srgb, var(--color-border) 72%, white)' }}>
+                  <div className="overflow-x-auto border-t" style={{ borderColor: 'var(--color-border)' }}>
                     <table className="w-full table-fixed text-left text-sm">
                       <colgroup>
                         <col className="w-[10%]" />
@@ -293,12 +267,11 @@ function ResultSection({
                         <col className="w-[20%]" />
                       </colgroup>
                       <thead>
-                        <tr style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 5%, white)' }}>
+                        <tr style={{ backgroundColor: 'color-mix(in srgb, var(--color-primary) 4%, white)' }}>
                           {['STT', 'Hệ số', 'Đơn vị', 'Giá trị'].map((header) => (
                             <th
                               key={header}
-                              className={`px-4 py-3 text-xs font-semibold tracking-[0.14em] uppercase ${header === 'Giá trị' ? 'text-right' : 'text-left'}`}
-                              style={{ color: 'color-mix(in srgb, var(--color-text) 58%, white)' }}
+                              className={`px-4 py-3 text-xs font-semibold tracking-[0.18em] uppercase text-[var(--color-muted)] ${header === 'Giá trị' ? 'text-right' : 'text-left'}`}
                             >
                               {header}
                             </th>
@@ -344,9 +317,9 @@ function StockSection({
   if (!stock) return null
 
   return (
-    <div className="mt-4 rounded-2xl border px-4 py-4" style={{ borderColor: 'var(--color-border)' }}>
+    <div className="mt-5 border-t pt-5" style={{ borderColor: 'var(--color-border)' }}>
       <p className="text-sm font-semibold">Tồn theo chiều dài {requestedLength} m</p>
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
+      <div className="mt-4 grid gap-x-8 gap-y-5 md:grid-cols-2">
         <StockBox
           title="Mũi"
           physicalQty={stock.muiPhysicalQty}
@@ -376,12 +349,12 @@ function StockBox({
   retailQty: number
 }>) {
   return (
-    <div className="rounded-2xl border px-4 py-4 text-sm" style={{ borderColor: 'var(--color-border)' }}>
+    <div className="text-sm">
       <p className="font-semibold">{title}</p>
-      <div className="app-muted mt-3 grid gap-2">
-        <span>Tồn vật lý: {physicalQty}</span>
-        <span>Có thể giao dự án: {projectQty}</span>
-        <span>Có thể giao khách lẻ: {retailQty}</span>
+      <div className="mt-3 grid gap-4 sm:grid-cols-3">
+        <SpecBox label="Tồn vật lý" value={formatNumber(physicalQty)} />
+        <SpecBox label="Dự án" value={formatNumber(projectQty)} />
+        <SpecBox label="Khách lẻ" value={formatNumber(retailQty)} />
       </div>
     </div>
   )
@@ -395,9 +368,9 @@ function SpecBox({
   value: string
 }>) {
   return (
-    <div className="rounded-2xl border px-4 py-3" style={{ borderColor: 'var(--color-border)' }}>
-      <p className="app-muted text-xs font-semibold tracking-[0.12em] uppercase">{label}</p>
-      <p className="mt-2 text-sm font-semibold">{value}</p>
+    <div className="min-w-0">
+      <p className="app-muted text-[11px] uppercase tracking-[0.18em]">{label}</p>
+      <p className="mt-1 text-sm">{value}</p>
     </div>
   )
 }
@@ -410,7 +383,7 @@ function ExpandableTechSection({
   children: React.ReactNode
 }>) {
   return (
-    <details className="app-surface rounded-2xl px-6 py-4 group">
+    <details className="group border-t pt-5" style={{ borderColor: 'var(--color-border)' }}>
       <summary className="cursor-pointer list-none text-sm font-semibold">
         <div className="flex items-center justify-between gap-3">
           <span>{title}</span>

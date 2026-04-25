@@ -14,6 +14,8 @@ create table if not exists public.stock_read_model_health (
 create table if not exists public.finished_goods_stock_summary (
   item_key text primary key,
   item_label text not null,
+  template_id uuid null,
+  ma_coc text null,
   loai_coc text not null,
   ten_doan text not null,
   chieu_dai_m numeric(12,3) not null default 0,
@@ -32,6 +34,12 @@ create index if not exists finished_goods_stock_summary_qty_idx
 
 create index if not exists finished_goods_stock_summary_item_lookup_idx
   on public.finished_goods_stock_summary (loai_coc, ten_doan, chieu_dai_m);
+
+alter table public.finished_goods_stock_summary add column if not exists template_id uuid null;
+alter table public.finished_goods_stock_summary add column if not exists ma_coc text null;
+
+create index if not exists finished_goods_stock_summary_template_lookup_idx
+  on public.finished_goods_stock_summary (template_id, ten_doan, chieu_dai_m);
 
 create table if not exists public.material_stock_balance (
   material_code text primary key,

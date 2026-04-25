@@ -8,6 +8,8 @@ import { FinishedGoodsGeneratedLabelsPrintPageClient } from '@/components/ton-kh
 
 type SearchParams = Promise<{ lot_ids?: string; autoPrint?: string }>
 
+export const dynamic = 'force-dynamic'
+
 export default async function FinishedGoodsGeneratedLabelsPrintPage(props: { searchParams: SearchParams }) {
   const { profile } = await getCurrentSessionProfile()
   if (!canPrintFinishedGoodsGeneratedLabels(profile.role)) {

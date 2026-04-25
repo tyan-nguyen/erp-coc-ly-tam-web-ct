@@ -4,16 +4,23 @@ import {
   canConfirmShipment,
   canCreateShipment,
   canViewShipment,
+  isAdminRole,
 } from '@/lib/auth/roles'
 import { loadDonHangList } from '@/lib/don-hang/repository'
 import type { AvailableSegmentOption } from '@/lib/san-xuat/types'
-import { loadFinishedGoodsProjectPoolByBucket, loadFinishedGoodsRetailPoolByBucket } from '@/lib/ton-kho-thanh-pham/repository'
+import { buildStockIdentityKey } from '@/lib/ton-kho-thanh-pham/internal'
+import {
+  loadFinishedGoodsCurrentInventoryRows,
+  loadFinishedGoodsProjectPoolByBucket,
+} from '@/lib/ton-kho-thanh-pham/repository'
 
 type AnySupabase = SupabaseClient
 
 type RawVoucherLine = {
   lineId: string
   itemLabel: string
+  templateId: string | null
+  maCoc: string | null
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -93,6 +100,8 @@ export type XuatHangSourceLine = {
   customerName: string | null
   projectId: string | null
   projectName: string | null
+  templateId: string | null
+  maCoc: string | null
   loaiCoc: string
   tenDoan: string
   chieuDaiM: number
@@ -151,6 +160,8 @@ export type XuatHangVoucherDetail = {
   returnFeatureReady: boolean
   requestedQtyTotal: number
   actualQtyTotal: number
+  canSoftReopenReturnRequest: boolean
+  canAdminReopenShipment: boolean
 }
 
 export type XuatHangReturnRequestLine = {
@@ -192,6 +203,11 @@ export type ShipmentReturnResult = {
 
 export type ShipmentReturnRequestResult = {
   requestedCount: number
+}
+
+export type ShipmentReopenResult = {
+  status: XuatHangStatus
+  revertedCount?: number
 }
 
 export type DeleteXuatHangVoucherResult = {
@@ -245,12 +261,12 @@ function makeVoucherCode(voucherId: string) {
   return `PX-${String(voucherId || '').slice(-6).toUpperCase()}`
 }
 
-function buildItemLabel(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${loaiCoc} | ${tenDoan} | ${formatNumber(chieuDaiM)}m`
+function buildItemLabel(loaiCoc: string, tenDoan: string, chieuDaiM: number, maCoc?: string | null) {
+  return `${normalizeText(maCoc) || loaiCoc} | ${tenDoan} | ${formatNumber(chieuDaiM)}m`
 }
 
-function buildStockItemLabel(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${loaiCoc} | ${deriveStockSegmentGroup(tenDoan)} | ${formatNumber(chieuDaiM)}m`
+function buildStockItemLabel(loaiCoc: string, tenDoan: string, chieuDaiM: number, maCoc?: string | null) {
+  return `${normalizeText(maCoc) || loaiCoc} | ${deriveStockSegmentGroup(tenDoan)} | ${formatNumber(chieuDaiM)}m`
 }
 
 function formatNumber(value: number) {
@@ -260,8 +276,21 @@ function formatNumber(value: number) {
   }).format(Number(value || 0))
 }
 
-function buildOrderSourceKey(orderId: string, loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${orderId}::${loaiCoc}::${tenDoan}::${round3(chieuDaiM)}`
+function buildShipmentIdentityKey(input: { templateId?: string | null; maCoc?: string | null; loaiCoc: string }) {
+  return buildStockIdentityKey(input)
+}
+
+function buildLegacyShipmentKey(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
+  return `${normalizeText(loaiCoc)}::${deriveStockSegmentGroup(normalizeText(tenDoan))}::${round3(chieuDaiM)}`
+}
+
+function buildOrderSourceKey(
+  orderId: string,
+  identity: { templateId?: string | null; maCoc?: string | null; loaiCoc: string },
+  tenDoan: string,
+  chieuDaiM: number
+) {
+  return `${orderId}::${buildShipmentIdentityKey(identity)}::${tenDoan}::${round3(chieuDaiM)}`
 }
 
 export async function loadNetDeliveredTotalsByOrderSegment(supabase: AnySupabase) {
@@ -330,22 +359,36 @@ function buildQuoteAccessorySourceKey(quoteId: string, key: string) {
   return `${quoteId}::ACCESSORY::${key}`
 }
 
-function buildStockSourceKey(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${normalizeText(loaiCoc)}::${deriveStockSegmentGroup(normalizeText(tenDoan))}::${round3(chieuDaiM)}`
+function buildStockSourceKey(
+  identity: { templateId?: string | null; maCoc?: string | null; loaiCoc: string },
+  tenDoan: string,
+  chieuDaiM: number
+) {
+  return `${buildShipmentIdentityKey(identity)}::${deriveStockSegmentGroup(normalizeText(tenDoan))}::${round3(chieuDaiM)}`
 }
 
-function buildExactShipmentItemKey(loaiCoc: string, tenDoan: string, chieuDaiM: number) {
-  return `${normalizeText(loaiCoc)}::${normalizeText(tenDoan)}::${round3(chieuDaiM)}`
+function buildExactShipmentItemKey(
+  identity: { templateId?: string | null; maCoc?: string | null; loaiCoc: string },
+  tenDoan: string,
+  chieuDaiM: number
+) {
+  return `${buildShipmentIdentityKey(identity)}::${normalizeText(tenDoan)}::${round3(chieuDaiM)}`
 }
 
 function normalizeShipmentStockSourceKey(line: {
   stockSourceKey?: string | null
+  templateId?: string | null
+  maCoc?: string | null
   loaiCoc?: string | null
   tenDoan?: string | null
   chieuDaiM?: number | null
 }) {
   const rebuilt = buildStockSourceKey(
-    String(line.loaiCoc || ''),
+    {
+      templateId: String(line.templateId || ''),
+      maCoc: String(line.maCoc || ''),
+      loaiCoc: String(line.loaiCoc || ''),
+    },
     String(line.tenDoan || ''),
     round3(toNumber(line.chieuDaiM))
   )
@@ -355,6 +398,8 @@ function normalizeShipmentStockSourceKey(line: {
 function parseOrderSegments(raw: unknown) {
   if (!Array.isArray(raw)) {
     return [] as Array<{
+      templateId?: string | null
+      maCoc?: string | null
       doanKey: string
       tenDoan: string
       chieuDaiM: number
@@ -384,6 +429,8 @@ function parseOrderSegments(raw: unknown) {
         0
 
       return {
+        templateId: normalizeText(row.template_id) || null,
+        maCoc: normalizeText(row.ma_coc) || null,
         doanKey,
         tenDoan,
         chieuDaiM,
@@ -454,7 +501,7 @@ async function loadReturnedSerialsByVoucher(supabase: AnySupabase, voucherIds: s
   if (serialIds.length) {
     const { data: serialRows, error: serialError } = await supabase
       .from('pile_serial')
-      .select('serial_id, serial_code, order_id, loai_coc, ten_doan, chieu_dai_m')
+      .select('serial_id, serial_code, order_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m')
       .in('serial_id', serialIds)
       .eq('is_active', true)
     if (serialError) throw serialError
@@ -463,10 +510,15 @@ async function loadReturnedSerialsByVoucher(supabase: AnySupabase, voucherIds: s
       const loaiCoc = String(row.loai_coc || '')
       const tenDoan = String(row.ten_doan || '')
       const chieuDaiM = toNumber(row.chieu_dai_m)
+      const identity = {
+        templateId: String(row.template_id || ''),
+        maCoc: String(row.ma_coc || ''),
+        loaiCoc,
+      }
       serialMetaById.set(serialId, {
         serialCode: String(row.serial_code || ''),
-        orderSourceKey: row.order_id ? buildOrderSourceKey(String(row.order_id), loaiCoc, tenDoan, chieuDaiM) : null,
-        stockSourceKey: buildStockSourceKey(loaiCoc, tenDoan, chieuDaiM),
+        orderSourceKey: row.order_id ? buildOrderSourceKey(String(row.order_id), identity, tenDoan, chieuDaiM) : null,
+        stockSourceKey: buildStockSourceKey(identity, tenDoan, chieuDaiM),
       })
     }
   }
@@ -562,7 +614,7 @@ async function loadConfirmedSerialsByVoucher(supabase: AnySupabase, voucherIds: 
   if (serialIds.length) {
     const { data: serialRows, error: serialError } = await supabase
       .from('pile_serial')
-      .select('serial_id, serial_code, order_id, loai_coc, ten_doan, chieu_dai_m')
+      .select('serial_id, serial_code, order_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m')
       .in('serial_id', serialIds)
       .eq('is_active', true)
     if (serialError) throw serialError
@@ -571,10 +623,15 @@ async function loadConfirmedSerialsByVoucher(supabase: AnySupabase, voucherIds: 
       const loaiCoc = String(row.loai_coc || '')
       const tenDoan = String(row.ten_doan || '')
       const chieuDaiM = toNumber(row.chieu_dai_m)
+      const identity = {
+        templateId: String(row.template_id || ''),
+        maCoc: String(row.ma_coc || ''),
+        loaiCoc,
+      }
       serialMetaById.set(serialId, {
         serialCode: String(row.serial_code || ''),
-        orderSourceKey: row.order_id ? buildOrderSourceKey(String(row.order_id), loaiCoc, tenDoan, chieuDaiM) : null,
-        stockSourceKey: buildStockSourceKey(loaiCoc, tenDoan, chieuDaiM),
+        orderSourceKey: row.order_id ? buildOrderSourceKey(String(row.order_id), identity, tenDoan, chieuDaiM) : null,
+        stockSourceKey: buildStockSourceKey(identity, tenDoan, chieuDaiM),
       })
     }
   }
@@ -618,7 +675,7 @@ async function loadReturnedSourceRows(
   const { data: serialRows, error: serialError } = serialIds.length
     ? await supabase
         .from('pile_serial')
-        .select('serial_id, order_id, boc_id, quote_id, loai_coc, ten_doan, chieu_dai_m')
+        .select('serial_id, order_id, boc_id, quote_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m')
         .in('serial_id', serialIds)
         .eq('is_active', true)
     : { data: [], error: null }
@@ -636,8 +693,13 @@ async function loadReturnedSourceRows(
     const loaiCoc = String(pileSerial.loai_coc || order?.order.loai_coc || '-')
     const tenDoan = String(pileSerial.ten_doan || '-')
     const chieuDaiM = toNumber(pileSerial.chieu_dai_m)
-    const stockSourceKey = buildStockSourceKey(loaiCoc, tenDoan, chieuDaiM)
-    const orderSourceKey = orderId ? buildOrderSourceKey(orderId, loaiCoc, tenDoan, chieuDaiM) : null
+    const identity = {
+      templateId: String(pileSerial.template_id || ''),
+      maCoc: String(pileSerial.ma_coc || ''),
+      loaiCoc,
+    }
+    const stockSourceKey = buildStockSourceKey(identity, tenDoan, chieuDaiM)
+    const orderSourceKey = orderId ? buildOrderSourceKey(orderId, identity, tenDoan, chieuDaiM) : null
     const resolutionStatus = String(row.resolution_status || '')
     const visibleInProject =
       row.visible_in_project == null ? resolutionStatus === 'NHAP_DU_AN' : Boolean(row.visible_in_project)
@@ -659,10 +721,12 @@ async function loadReturnedSourceRows(
         customerName: order?.khachHangName || null,
         projectId: order?.order.da_id || null,
         projectName: order?.duAnName || null,
+        templateId: identity.templateId || null,
+        maCoc: identity.maCoc || null,
         loaiCoc,
         tenDoan,
         chieuDaiM,
-        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, identity.maCoc),
         orderedQty: 0,
         acceptedQty: 1,
         shippedQty: 0,
@@ -690,10 +754,12 @@ async function loadReturnedSourceRows(
         customerName: null,
         projectId: null,
         projectName: null,
+        templateId: identity.templateId || null,
+        maCoc: identity.maCoc || null,
         loaiCoc,
         tenDoan,
         chieuDaiM,
-        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, identity.maCoc),
         orderedQty: 0,
         acceptedQty: 1,
         shippedQty: 0,
@@ -773,6 +839,8 @@ function buildShipmentOrderSegments(orders: Awaited<ReturnType<typeof loadDonHan
         maBaoGia: item.linkedQuote.maBaoGia,
         khachHang: item.khachHangName || item.order.kh_id,
         duAn: item.duAnName || item.order.da_id,
+        templateId: segment.templateId || null,
+        maCoc: segment.maCoc || null,
         loaiCoc: item.order.loai_coc,
         doanKey: segment.doanKey,
         tenDoan: segment.tenDoan,
@@ -828,7 +896,7 @@ async function loadQcAcceptedSourceRows(
   if (validPlanIds.size) {
     const { data: lineRows, error: lineError } = await supabase
       .from('ke_hoach_sx_line')
-      .select('line_id, plan_id, order_id, boc_id, loai_coc, ten_doan, chieu_dai_m, so_luong_dat')
+      .select('line_id, plan_id, order_id, boc_id, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, so_luong_dat')
       .in('plan_id', Array.from(validPlanIds))
       .eq('is_active', true)
 
@@ -847,7 +915,7 @@ async function loadQcAcceptedSourceRows(
   let serialQuery = supabase
     .from('pile_serial')
     .select(
-      'serial_id, qc_status, disposition_status, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(plan_line_id, order_id, boc_id, quote_id)'
+      'serial_id, template_id, ma_coc, qc_status, disposition_status, loai_coc, ten_doan, chieu_dai_m, production_lot!inner(plan_line_id, order_id, boc_id, quote_id)'
     )
     .eq('is_active', true)
   serialQuery = includeRetailSources ? serialQuery.in('qc_status', ['DAT', 'LOI']) : serialQuery.eq('qc_status', 'DAT')
@@ -874,8 +942,13 @@ async function loadQcAcceptedSourceRows(
     const loaiCoc = String(row.loai_coc || lot.loai_coc || order?.order.loai_coc || '-')
     const tenDoan = String(row.ten_doan || lot.ten_doan || '-')
     const chieuDaiM = toNumber(row.chieu_dai_m ?? lot.chieu_dai_m)
-    const stockSourceKey = buildStockSourceKey(loaiCoc, tenDoan, chieuDaiM)
-    const orderSourceKey = orderId ? buildOrderSourceKey(orderId, loaiCoc, tenDoan, chieuDaiM) : null
+    const identity = {
+      templateId: String(row.template_id || lot.template_id || ''),
+      maCoc: String(row.ma_coc || lot.ma_coc || ''),
+      loaiCoc,
+    }
+    const stockSourceKey = buildStockSourceKey(identity, tenDoan, chieuDaiM)
+    const orderSourceKey = orderId ? buildOrderSourceKey(orderId, identity, tenDoan, chieuDaiM) : null
     const bocId = String(lot.boc_id || order?.order.boc_id || '') || null
     const quoteId = String(lot.quote_id || order?.linkedQuote.quoteId || '') || null
     const qcStatus = String(row.qc_status || '')
@@ -894,10 +967,12 @@ async function loadQcAcceptedSourceRows(
         customerName: order?.khachHangName || null,
         projectId: order?.order.da_id || null,
         projectName: order?.duAnName || null,
+        templateId: identity.templateId || null,
+        maCoc: identity.maCoc || null,
         loaiCoc,
         tenDoan,
         chieuDaiM,
-        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, identity.maCoc),
         orderedQty: 0,
         acceptedQty: 1,
         shippedQty: 0,
@@ -928,10 +1003,12 @@ async function loadQcAcceptedSourceRows(
         customerName: null,
         projectId: null,
         projectName: null,
+        templateId: identity.templateId || null,
+        maCoc: identity.maCoc || null,
         loaiCoc,
         tenDoan,
         chieuDaiM,
-        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+        itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, identity.maCoc),
         orderedQty: 0,
         acceptedQty: 1,
         shippedQty: 0,
@@ -980,8 +1057,13 @@ async function loadQcAcceptedSourceRows(
       const loaiCoc = String(line.loai_coc || order?.order.loai_coc || '-')
       const tenDoan = String(line.ten_doan || '-')
       const chieuDaiM = toNumber(line.chieu_dai_m)
-      const orderSourceKey = orderId ? buildOrderSourceKey(orderId, loaiCoc, tenDoan, chieuDaiM) : null
-      const stockSourceKey = buildStockSourceKey(loaiCoc, tenDoan, chieuDaiM)
+      const identity = {
+        templateId: String(line.template_id || ''),
+        maCoc: String(line.ma_coc || ''),
+        loaiCoc,
+      }
+      const orderSourceKey = orderId ? buildOrderSourceKey(orderId, identity, tenDoan, chieuDaiM) : null
+      const stockSourceKey = buildStockSourceKey(identity, tenDoan, chieuDaiM)
       if (!serialTableReady && !serialManagedLineIds.has(lineId) && acceptedQty > 0) {
         acceptedRows.push({
           sourceKey: orderSourceKey || stockSourceKey,
@@ -995,10 +1077,12 @@ async function loadQcAcceptedSourceRows(
           customerName: order?.khachHangName || null,
           projectId: order?.order.da_id || null,
           projectName: order?.duAnName || null,
+          templateId: identity.templateId || null,
+          maCoc: identity.maCoc || null,
           loaiCoc,
           tenDoan,
           chieuDaiM,
-          itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+          itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, identity.maCoc),
           orderedQty: toNumber(line.so_luong_dat),
           acceptedQty,
           shippedQty: 0,
@@ -1028,10 +1112,12 @@ async function loadQcAcceptedSourceRows(
           customerName: null,
           projectId: null,
           projectName: null,
+          templateId: identity.templateId || null,
+          maCoc: identity.maCoc || null,
           loaiCoc,
           tenDoan,
           chieuDaiM,
-          itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM),
+          itemLabel: buildItemLabel(loaiCoc, tenDoan, chieuDaiM, identity.maCoc),
           orderedQty: 0,
           acceptedQty: retailDelta,
           shippedQty: 0,
@@ -1207,15 +1293,8 @@ function aggregateOrderSources(
   projectPoolBySource: Map<string, number>
 ) {
   const acceptedMap = new Map<string, XuatHangSourceLine>()
-  const stockAcceptedQtyBySource = new Map<string, number>()
   const ordersWithOperationalRows = new Set<string>()
   for (const row of acceptedRows) {
-    if (row.stockSourceKey) {
-      stockAcceptedQtyBySource.set(
-        row.stockSourceKey,
-        round3((stockAcceptedQtyBySource.get(row.stockSourceKey) ?? 0) + row.acceptedQty)
-      )
-    }
     if (!row.orderSourceKey) {
       continue
     }
@@ -1246,7 +1325,16 @@ function aggregateOrderSources(
   for (const segment of approvedSegments) {
     const order = orderMap.get(segment.orderId)
     if (!order) continue
-    const key = buildOrderSourceKey(segment.orderId, segment.loaiCoc, segment.tenDoan, segment.chieuDaiM)
+    const key = buildOrderSourceKey(
+      segment.orderId,
+      {
+        templateId: segment.templateId || null,
+        maCoc: segment.maCoc || null,
+        loaiCoc: segment.loaiCoc,
+      },
+      segment.tenDoan,
+      segment.chieuDaiM
+    )
     const accepted = acceptedMap.get(key)
     const unitPriceRef =
       (segment.bocId ? quoteUnitPriceByBocId.get(segment.bocId) : undefined) ??
@@ -1271,10 +1359,12 @@ function aggregateOrderSources(
       customerName: segment.khachHang,
       projectId: order.order.da_id,
       projectName: segment.duAn,
+      templateId: segment.templateId || null,
+      maCoc: segment.maCoc || null,
       loaiCoc: segment.loaiCoc,
       tenDoan: segment.tenDoan,
       chieuDaiM: segment.chieuDaiM,
-      itemLabel: buildItemLabel(segment.loaiCoc, segment.tenDoan, segment.chieuDaiM),
+      itemLabel: buildItemLabel(segment.loaiCoc, segment.tenDoan, segment.chieuDaiM, segment.maCoc),
       orderedQty: segment.soLuongDat,
       acceptedQty: accepted?.acceptedQty ?? 0,
       shippedQty: 0,
@@ -1283,7 +1373,15 @@ function aggregateOrderSources(
       reservedQty: 0,
       reservedByVouchers: [],
       unitPriceRef,
-      stockSourceKey: buildStockSourceKey(segment.loaiCoc, segment.tenDoan, segment.chieuDaiM),
+      stockSourceKey: buildStockSourceKey(
+        {
+          templateId: segment.templateId || null,
+          maCoc: segment.maCoc || null,
+          loaiCoc: segment.loaiCoc,
+        },
+        segment.tenDoan,
+        segment.chieuDaiM
+      ),
       orderSourceKey: key,
     })
   }
@@ -1295,7 +1393,7 @@ function aggregateOrderSources(
 
   return Array.from(bucket.values())
     .map((row) => {
-      const physicalPoolQty = projectPoolBySource.get(row.stockSourceKey) ?? stockAcceptedQtyBySource.get(row.stockSourceKey) ?? 0
+      const physicalPoolQty = projectPoolBySource.get(row.stockSourceKey) ?? 0
       const reservedQty = usage.stockUsage.get(row.stockSourceKey) ?? 0
       const reservedByVouchers = Array.from(usage.reservedByStockSource.get(row.stockSourceKey)?.values() || []).sort((a, b) =>
         `${b.createdAt} ${b.maPhieu}`.localeCompare(`${a.createdAt} ${a.maPhieu}`)
@@ -1349,11 +1447,13 @@ async function buildQuoteAccessorySources(
         maOrder: option.orderLabels.join(', ') || null,
         quoteId: option.quoteId,
         maBaoGia: option.maBaoGia,
-        customerId: option.customerId,
-        customerName: option.customerName,
-        projectId: option.projectId,
-        projectName: option.projectName,
-        loaiCoc: 'PHU_KIEN',
+      customerId: option.customerId,
+      customerName: option.customerName,
+      projectId: option.projectId,
+      projectName: option.projectName,
+      templateId: null,
+      maCoc: null,
+      loaiCoc: 'PHU_KIEN',
         tenDoan: label,
         chieuDaiM: 0,
         itemLabel: label,
@@ -1365,7 +1465,7 @@ async function buildQuoteAccessorySources(
         reservedQty: 0,
         reservedByVouchers: [],
         unitPriceRef: unitPriceVat > 0 ? unitPriceVat : unitPrice > 0 ? unitPrice : null,
-        stockSourceKey: buildStockSourceKey('PHU_KIEN', label, 0),
+        stockSourceKey: buildStockSourceKey({ templateId: null, maCoc: null, loaiCoc: 'PHU_KIEN' }, label, 0),
         orderSourceKey: sourceKey,
       })
     }
@@ -1374,48 +1474,76 @@ async function buildQuoteAccessorySources(
   return rows
 }
 
-function aggregateStockSources(
-  acceptedRows: XuatHangSourceLine[],
-  usage: ReturnType<typeof aggregateShipmentUsage>,
-  retailPoolBySource: Map<string, number>
+async function loadRetailInventorySources(
+  supabase: AnySupabase,
+  usage: ReturnType<typeof aggregateShipmentUsage>
 ) {
+  const currentRows = await loadFinishedGoodsCurrentInventoryRows(supabase)
   const bucket = new Map<string, XuatHangSourceLine>()
-  for (const row of acceptedRows) {
-    const key = row.stockSourceKey
-    const current = bucket.get(key)
+
+  for (const row of currentRows) {
+    if (!row.visibleInRetail) continue
+
+    const stockSourceKey = buildStockSourceKey(
+      {
+        templateId: row.templateId || null,
+        maCoc: row.maCoc || null,
+        loaiCoc: row.loaiCoc,
+      },
+      row.tenDoan,
+      row.chieuDaiM
+    )
+
+    const current = bucket.get(stockSourceKey)
     if (current) {
-      current.acceptedQty = round3(current.acceptedQty + row.acceptedQty)
+      current.physicalQty = round3(current.physicalQty + 1)
+      current.acceptedQty = round3(current.acceptedQty + 1)
       continue
     }
-    bucket.set(key, {
-      ...row,
-      sourceKey: key,
+
+    bucket.set(stockSourceKey, {
+      sourceKey: stockSourceKey,
       mode: 'TON_KHO',
       bocId: null,
       orderId: null,
       maOrder: null,
       quoteId: null,
       maBaoGia: null,
+      customerId: null,
+      customerName: null,
       projectId: null,
       projectName: null,
+      templateId: row.templateId || null,
+      maCoc: row.maCoc || null,
+      loaiCoc: row.loaiCoc,
       tenDoan: deriveStockSegmentGroup(row.tenDoan),
-      itemLabel: buildStockItemLabel(row.loaiCoc, row.tenDoan, row.chieuDaiM),
+      chieuDaiM: row.chieuDaiM,
+      itemLabel: buildStockItemLabel(row.loaiCoc, row.tenDoan, row.chieuDaiM, row.maCoc),
+      orderedQty: 0,
+      acceptedQty: 1,
+      shippedQty: 0,
+      physicalQty: 1,
+      availableQty: 1,
+      reservedQty: 0,
+      reservedByVouchers: [],
+      unitPriceRef: null,
+      stockSourceKey,
+      orderSourceKey: null,
     })
   }
 
   return Array.from(bucket.values())
     .map((row) => {
-      const used = usage.stockUsage.get(row.stockSourceKey) ?? 0
-      const shipped = usage.stockShipped.get(row.stockSourceKey) ?? 0
-      const retailPoolQty = retailPoolBySource.get(row.stockSourceKey) ?? 0
-      const availableQty = Math.max(round3(retailPoolQty - used), 0)
+      const reservedQty = usage.stockUsage.get(row.stockSourceKey) ?? 0
+      const shippedQty = usage.stockShipped.get(row.stockSourceKey) ?? 0
       return {
         ...row,
-        shippedQty: shipped,
-        physicalQty: Math.max(round3(retailPoolQty), 0),
-        availableQty,
-        reservedQty: 0,
-        reservedByVouchers: [],
+        shippedQty,
+        availableQty: Math.max(round3(row.physicalQty - reservedQty), 0),
+        reservedQty: Math.max(round3(reservedQty), 0),
+        reservedByVouchers: Array.from(usage.reservedByStockSource.get(row.stockSourceKey)?.values() || []).sort((a, b) =>
+          `${b.createdAt} ${b.maPhieu}`.localeCompare(`${a.createdAt} ${a.maPhieu}`)
+        ),
       }
     })
     .filter((row) => row.availableQty > 0)
@@ -1463,6 +1591,8 @@ function buildVoucherDetail(row: Record<string, unknown>) {
   const lines = safeArray<Record<string, unknown>>(payload.lines).map((line) => ({
     lineId: String(line.lineId || ''),
     itemLabel: String(line.itemLabel || '-'),
+    templateId: normalizeText(line.templateId) || null,
+    maCoc: normalizeText(line.maCoc) || null,
     loaiCoc: String(line.loaiCoc || '-'),
     tenDoan: String(line.tenDoan || '-'),
     chieuDaiM: toNumber(line.chieuDaiM),
@@ -1582,6 +1712,8 @@ function buildVoucherDetail(row: Record<string, unknown>) {
     returnFeatureReady: Boolean(payload.returnFeatureReady),
     requestedQtyTotal,
     actualQtyTotal,
+    canSoftReopenReturnRequest: false,
+    canAdminReopenShipment: false,
   } satisfies XuatHangVoucherDetail
 }
 
@@ -1594,26 +1726,45 @@ async function loadAvailableShipmentSerials(
     .map((line) => ({
       lineId: line.lineId,
       itemLabel: line.itemLabel,
-      loaiCoc: normalizeText(line.loaiCoc),
+      templateId: normalizeText(line.templateId),
+      maCoc: normalizeText(line.maCoc),
       stockSourceKey: normalizeShipmentStockSourceKey(line),
+      legacyStockSourceKey: buildLegacyShipmentKey(
+        normalizeText(line.loaiCoc),
+        normalizeText(line.tenDoan),
+        round3(toNumber(line.chieuDaiM))
+      ),
     }))
 
   if (!lineMetas.length) return []
 
-  const allowedLoaiCoc = Array.from(new Set(lineMetas.map((line) => line.loaiCoc).filter(Boolean)))
-  if (!allowedLoaiCoc.length) return []
+  const allowedTemplateIds = Array.from(new Set(lineMetas.map((line) => line.templateId).filter(Boolean)))
+  const allowedMaCocs = Array.from(new Set(lineMetas.map((line) => line.maCoc).filter(Boolean)))
 
-  const { data, error } = await supabase
+  let serialQuery = supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, loai_coc, ten_doan, chieu_dai_m, qc_status, disposition_status, lifecycle_status, current_shipment_voucher_id, is_active'
+      'serial_id, serial_code, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, disposition_status, lifecycle_status, current_shipment_voucher_id, is_active'
     )
     .eq('is_active', true)
-    .in('loai_coc', allowedLoaiCoc)
+
+  if (allowedTemplateIds.length) {
+    serialQuery = serialQuery.in('template_id', allowedTemplateIds)
+  } else if (allowedMaCocs.length) {
+    serialQuery = serialQuery.in('ma_coc', allowedMaCocs)
+  } else {
+    return []
+  }
+
+  const { data, error } = await serialQuery
 
   if (error) throw error
 
-  const lineByStockSourceKey = new Map(lineMetas.map((line) => [line.stockSourceKey, line]))
+  const lineByStockSourceKey = new Map<string, (typeof lineMetas)[number]>()
+  for (const line of lineMetas) {
+    lineByStockSourceKey.set(line.stockSourceKey, line)
+    lineByStockSourceKey.set(line.legacyStockSourceKey, line)
+  }
   const usedSerialIds = new Set([
     ...detail.confirmedSerials.map((item) => normalizeText(item.serialId)).filter(Boolean),
     ...detail.returnedSerials.map((item) => normalizeText(item.serialId)).filter(Boolean),
@@ -1624,11 +1775,20 @@ async function loadAvailableShipmentSerials(
       const serialId = normalizeText(row.serial_id)
       const serialCode = normalizeCode(row.serial_code)
       const stockSourceKey = buildStockSourceKey(
+        {
+          templateId: normalizeText(row.template_id),
+          maCoc: normalizeText(row.ma_coc),
+          loaiCoc: normalizeText(row.loai_coc),
+        },
+        normalizeText(row.ten_doan),
+        round3(toNumber(row.chieu_dai_m))
+      )
+      const legacyStockSourceKey = buildLegacyShipmentKey(
         normalizeText(row.loai_coc),
         normalizeText(row.ten_doan),
         round3(toNumber(row.chieu_dai_m))
       )
-      const line = lineByStockSourceKey.get(stockSourceKey)
+      const line = lineByStockSourceKey.get(stockSourceKey) || lineByStockSourceKey.get(legacyStockSourceKey)
       if (!line || !serialId || !serialCode) return null
       if (usedSerialIds.has(serialId)) return null
 
@@ -1737,12 +1897,11 @@ async function loadXuatHangSourceContext(
 ) {
   const includeOrderSources = options.includeOrderSources ?? true
   const includeStockSources = options.includeStockSources ?? true
-  const [{ acceptedRows, orders }, voucherRows, customerMap, projectPoolBySource, retailPoolBySource] = await Promise.all([
+  const [{ acceptedRows, orders }, voucherRows, customerMap, projectPoolBySource] = await Promise.all([
     loadQcAcceptedSourceRows(supabase, { includeRetailSources: includeStockSources }),
     loadShipmentVoucherRows(supabase),
     loadCustomerMap(supabase),
     includeOrderSources ? loadFinishedGoodsProjectPoolByBucket(supabase) : Promise.resolve(new Map<string, number>()),
-    includeStockSources ? loadFinishedGoodsRetailPoolByBucket(supabase) : Promise.resolve(new Map<string, number>()),
   ])
   const returnRows = await loadReturnedSourceRows(supabase, orders)
   const effectiveAcceptedRows = [...acceptedRows, ...returnRows]
@@ -1764,7 +1923,7 @@ async function loadXuatHangSourceContext(
       )
     : []
   const accessorySources = includeOrderSources ? await buildQuoteAccessorySources(supabase, quoteOptions, usage) : []
-  const stockSources = includeStockSources ? aggregateStockSources(effectiveAcceptedRows, usage, retailPoolBySource) : []
+  const stockSources = includeStockSources ? await loadRetailInventorySources(supabase, usage) : []
 
   return {
     customerMap,
@@ -1965,6 +2124,17 @@ export async function loadXuatHangVoucherDetail(
   }
   return {
     ...mergedDetail,
+    canSoftReopenReturnRequest: Boolean(
+      mergedDetail.returnRequest &&
+        mergedDetail.returnRequest.status === 'PENDING' &&
+        mergedDetail.returnedSerials.length === 0
+    ),
+    canAdminReopenShipment: Boolean(
+      mergedDetail.status !== 'CHO_XAC_NHAN' &&
+        mergedDetail.confirmedSerials.length > 0 &&
+        !mergedDetail.returnRequest &&
+        mergedDetail.returnedSerials.length === 0
+    ),
     availableShipmentSerials: await loadAvailableShipmentSerials(supabase, mergedDetail),
   }
 }
@@ -1998,7 +2168,15 @@ export async function createXuatHangVoucher(
   const orderActualSourceMap = new Map<string, XuatHangSourceLine>()
   for (const item of sourceContext.orderSources) {
     if (item.loaiCoc === 'PHU_KIEN') continue
-    const exactItemKey = buildExactShipmentItemKey(item.loaiCoc, item.tenDoan, item.chieuDaiM)
+    const exactItemKey = buildExactShipmentItemKey(
+      {
+        templateId: item.templateId,
+        maCoc: item.maCoc,
+        loaiCoc: item.loaiCoc,
+      },
+      item.tenDoan,
+      item.chieuDaiM
+    )
     const current = orderActualSourceMap.get(exactItemKey)
     if (!current || item.availableQty > current.availableQty) {
       orderActualSourceMap.set(exactItemKey, item)
@@ -2025,7 +2203,15 @@ export async function createXuatHangVoucher(
     let substitutionReason: string | null = null
     if (params.mode === 'DON_HANG' && source.loaiCoc !== 'PHU_KIEN') {
       const actualSourceKey = normalizeText(item.actualSourceKey)
-      const sourceExactItemKey = buildExactShipmentItemKey(source.loaiCoc, source.tenDoan, source.chieuDaiM)
+      const sourceExactItemKey = buildExactShipmentItemKey(
+        {
+          templateId: source.templateId,
+          maCoc: source.maCoc,
+          loaiCoc: source.loaiCoc,
+        },
+        source.tenDoan,
+        source.chieuDaiM
+      )
       if (actualSourceKey && actualSourceKey !== sourceExactItemKey) {
         const matchedActualSource = orderActualSourceMap.get(actualSourceKey)
         if (!matchedActualSource) {
@@ -2107,6 +2293,8 @@ export async function createXuatHangVoucher(
     lines: selectedLines.map(({ source, actualSource, requestedQty, unitPrice, substitutionReason }) => ({
       lineId: randomUUID(),
       itemLabel: actualSource.itemLabel,
+      templateId: actualSource.templateId,
+      maCoc: actualSource.maCoc,
       loaiCoc: actualSource.loaiCoc,
       tenDoan: actualSource.tenDoan,
       chieuDaiM: actualSource.chieuDaiM,
@@ -2115,8 +2303,24 @@ export async function createXuatHangVoucher(
       originalTenDoan: source.tenDoan,
       originalChieuDaiM: source.chieuDaiM,
       isSubstituted:
-        buildExactShipmentItemKey(actualSource.loaiCoc, actualSource.tenDoan, actualSource.chieuDaiM) !==
-        buildExactShipmentItemKey(source.loaiCoc, source.tenDoan, source.chieuDaiM),
+        buildExactShipmentItemKey(
+          {
+            templateId: actualSource.templateId,
+            maCoc: actualSource.maCoc,
+            loaiCoc: actualSource.loaiCoc,
+          },
+          actualSource.tenDoan,
+          actualSource.chieuDaiM
+        ) !==
+        buildExactShipmentItemKey(
+          {
+            templateId: source.templateId,
+            maCoc: source.maCoc,
+            loaiCoc: source.loaiCoc,
+          },
+          source.tenDoan,
+          source.chieuDaiM
+        ),
       substitutionReason,
       bocId: source.bocId,
       requestedQty,
@@ -2212,7 +2416,7 @@ export async function confirmXuatHangVoucher(
       let query = supabase
         .from('pile_serial')
         .select(
-          'serial_id, serial_code, loai_coc, ten_doan, chieu_dai_m, qc_status, disposition_status, lifecycle_status, current_shipment_voucher_id, is_active'
+          'serial_id, serial_code, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, disposition_status, lifecycle_status, current_shipment_voucher_id, is_active'
         )
         .eq('is_active', true)
 
@@ -2267,12 +2471,21 @@ export async function confirmXuatHangVoucher(
       }
 
       const serialStockSourceKey = buildStockSourceKey(
+        {
+          templateId: normalizeText(matched.template_id),
+          maCoc: normalizeText(matched.ma_coc),
+          loaiCoc: normalizeText(matched.loai_coc),
+        },
+        normalizeText(matched.ten_doan),
+        round3(toNumber(matched.chieu_dai_m))
+      )
+      const serialLegacyStockSourceKey = buildLegacyShipmentKey(
         normalizeText(matched.loai_coc),
         normalizeText(matched.ten_doan),
         round3(toNumber(matched.chieu_dai_m))
       )
       const lineStockSourceKey = normalizeShipmentStockSourceKey(line)
-      if (serialStockSourceKey !== lineStockSourceKey) {
+      if (serialStockSourceKey !== lineStockSourceKey && serialLegacyStockSourceKey !== lineStockSourceKey) {
         throw new Error(`Serial ${serialCode} không đúng mặt hàng của dòng ${line.itemLabel}.`)
       }
 
@@ -2432,7 +2645,7 @@ export async function resolveShipmentSerialScan(
   const { data, error } = await supabase
     .from('pile_serial')
     .select(
-      'serial_id, serial_code, loai_coc, ten_doan, chieu_dai_m, qc_status, disposition_status, lifecycle_status, current_shipment_voucher_id, is_active'
+      'serial_id, serial_code, template_id, ma_coc, loai_coc, ten_doan, chieu_dai_m, qc_status, disposition_status, lifecycle_status, current_shipment_voucher_id, is_active'
     )
     .eq('serial_code', code)
     .eq('is_active', true)
@@ -2452,7 +2665,21 @@ export async function resolveShipmentSerialScan(
   const line = detail.lines.find(
     (item) =>
       normalizeShipmentStockSourceKey(item) ===
-      buildStockSourceKey(normalizeText(data.loai_coc), normalizeText(data.ten_doan), round3(toNumber(data.chieu_dai_m)))
+        buildStockSourceKey(
+          {
+            templateId: normalizeText(data.template_id),
+            maCoc: normalizeText(data.ma_coc),
+            loaiCoc: normalizeText(data.loai_coc),
+          },
+          normalizeText(data.ten_doan),
+          round3(toNumber(data.chieu_dai_m))
+        ) ||
+      normalizeShipmentStockSourceKey(item) ===
+        buildLegacyShipmentKey(
+          normalizeText(data.loai_coc),
+          normalizeText(data.ten_doan),
+          round3(toNumber(data.chieu_dai_m))
+        )
   )
   if (!line) {
     throw new Error(`Serial ${code} không thuộc mặt hàng của phiếu xuất này.`)
@@ -2779,5 +3006,137 @@ export async function saveShipmentReturnRequest(
 
   return {
     requestedCount: validLines.reduce((sum, item) => sum + item.requestedQty, 0),
+  }
+}
+
+export async function reopenShipmentReturnRequest(
+  supabase: AnySupabase,
+  params: {
+    voucherId: string
+    userId: string
+    userRole: string
+  }
+): Promise<ShipmentReturnRequestResult> {
+  if (!canCreateShipment(params.userRole)) {
+    throw new Error('Chỉ KTBH hoặc Admin mới được mở lại đề nghị trả hàng.')
+  }
+
+  const detail = await loadXuatHangVoucherDetail(supabase, params.voucherId, 'admin')
+  if (!detail) throw new Error('Không tìm thấy phiếu xuất hàng.')
+  if (!detail.returnRequest || detail.returnRequest.status !== 'PENDING') {
+    throw new Error('Phiếu này không có đề nghị trả hàng đang chờ xử lý.')
+  }
+  const { count: returnVoucherCount, error: returnVoucherError } = await supabase
+    .from('return_voucher')
+    .select('return_voucher_id', { count: 'exact', head: true })
+    .eq('shipment_voucher_id', params.voucherId)
+    .eq('is_active', true)
+  if (returnVoucherError) throw returnVoucherError
+  if (Number(returnVoucherCount || 0) > 0) {
+    throw new Error('Đã có phiếu trả hàng downstream. Cần rollback bước sau trước khi mở lại đề nghị trả hàng.')
+  }
+  if (detail.returnedSerials.length > 0) {
+    throw new Error('Đã có serial trả lại được xử lý. Cần rollback bước sau trước khi mở lại đề nghị trả hàng.')
+  }
+
+  const payload = {
+    note: detail.note,
+    summary: {
+      customerName: detail.customerName,
+      projectName: detail.projectName,
+      maOrder: detail.orderLabel,
+      maBaoGia: detail.quoteLabel,
+    },
+    lines: detail.lines,
+    confirmedSerials: detail.confirmedSerials,
+    returnedSerials: detail.returnedSerials,
+    returnFeatureReady: detail.returnFeatureReady,
+  }
+
+  const { error } = await supabase
+    .from('phieu_xuat_ban')
+    .update({
+      ghi_chu: detail.note || null,
+      payload_json: payload,
+      updated_by: params.userId,
+      ngay_thao_tac: formatLocalDate(new Date()),
+    })
+    .eq('voucher_id', params.voucherId)
+    .eq('is_active', true)
+  if (error) throw error
+
+  return {
+    requestedCount: 0,
+  }
+}
+
+export async function reopenConfirmedShipmentVoucher(
+  supabase: AnySupabase,
+  params: {
+    voucherId: string
+    userId: string
+    userRole: string
+  }
+): Promise<ShipmentReopenResult> {
+  if (!isAdminRole(params.userRole)) {
+    throw new Error('Chỉ Admin mới được mở lại phiếu xuất hàng đã xác nhận.')
+  }
+
+  const detail = await loadXuatHangVoucherDetail(supabase, params.voucherId, 'admin')
+  if (!detail) throw new Error('Không tìm thấy phiếu xuất hàng.')
+  if (detail.status === 'CHO_XAC_NHAN') {
+    throw new Error('Phiếu này đang ở trạng thái chờ xác nhận, không cần mở lại.')
+  }
+  if (!detail.confirmedSerials.length) {
+    throw new Error('Phiếu này chưa có serial đã xác nhận để mở lại.')
+  }
+  if (detail.returnRequest || detail.returnedSerials.length > 0) {
+    throw new Error('Phiếu này đã phát sinh bước trả hàng. Cần rollback bước sau trước khi mở lại phiếu xuất.')
+  }
+  const { count: returnVoucherCount, error: returnVoucherError } = await supabase
+    .from('return_voucher')
+    .select('return_voucher_id', { count: 'exact', head: true })
+    .eq('shipment_voucher_id', params.voucherId)
+    .eq('is_active', true)
+  if (returnVoucherError) throw returnVoucherError
+  if (Number(returnVoucherCount || 0) > 0) {
+    throw new Error('Phiếu này đã phát sinh phiếu trả hàng downstream. Cần rollback bước sau trước khi mở lại phiếu xuất.')
+  }
+
+  const payload = {
+    note: detail.note,
+    summary: {
+      customerName: detail.customerName,
+      projectName: detail.projectName,
+      maOrder: detail.orderLabel,
+      maBaoGia: detail.quoteLabel,
+    },
+    lines: detail.lines.map((line) => ({
+      ...line,
+      actualQty: 0,
+    })),
+    confirmedSerials: [],
+    returnedSerials: [],
+    returnFeatureReady: detail.returnFeatureReady,
+  }
+
+  const { data: rpcResult, error } = await supabase.rpc('reopen_shipment_voucher_atomic', {
+    p_voucher_id: params.voucherId,
+    p_user_id: params.userId,
+    p_payload_json: payload,
+    p_note: detail.note || null,
+    p_ngay_thao_tac: formatLocalDate(new Date()),
+  })
+  if (error) {
+    const message = String(error.message || '')
+    if (/reopen_shipment_voucher_atomic/i.test(message) || /function .* does not exist/i.test(message)) {
+      throw new Error('Thiếu SQL patch reopen phiếu xuất hàng. Cần chạy file sql/reopen_shipment_voucher_atomic.sql trước.')
+    }
+    throw error
+  }
+
+  return {
+    status: 'CHO_XAC_NHAN',
+    revertedCount: Number(rpcResult || detail.confirmedSerials.length),
   }
 }

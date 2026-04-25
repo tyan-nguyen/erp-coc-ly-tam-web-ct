@@ -22,7 +22,9 @@ async function readXuatHangEnvelope<T>(response: Response, fallbackMessage: stri
 }
 
 export async function fetchXuatHangVoucherDetail(voucherId: string) {
-  const response = await fetch(`/api/xuat-hang/${voucherId}`)
+  const response = await fetch(`/api/xuat-hang/${voucherId}`, {
+    cache: 'no-store',
+  })
   return readXuatHangEnvelope<XuatHangVoucherDetail | null>(response, 'Không tải được chi tiết phiếu xuất hàng.')
 }
 
@@ -30,6 +32,7 @@ export async function fetchXuatHangCreateBootstrap(mode?: XuatHangSourceMode, in
   const query = mode ? `?mode=${encodeURIComponent(mode)}` : ''
   const response = await fetch(`/api/xuat-hang${query}`, {
     signal: init?.signal,
+    cache: 'no-store',
   })
   return readXuatHangEnvelope<XuatHangCreateBootstrap>(response, 'Không tải được dữ liệu lập phiếu xuất hàng.')
 }
@@ -100,6 +103,14 @@ export async function submitShipmentReturnRequest(input: {
   return readXuatHangEnvelope<ShipmentReturnRequestResult>(response, 'Không tạo được đề nghị trả hàng.')
 }
 
+export async function submitReopenShipmentReturnRequest(input: { voucherId: string }) {
+  const response = await fetch(`/api/xuat-hang/${input.voucherId}/return-request/reopen`, {
+    method: 'POST',
+  })
+
+  return readXuatHangEnvelope<ShipmentReturnRequestResult>(response, 'Không mở lại được đề nghị trả hàng.')
+}
+
 export async function submitShipmentReturn(input: {
   voucherId: string
   note: string
@@ -119,6 +130,14 @@ export async function submitShipmentReturn(input: {
   })
 
   return readXuatHangEnvelope<ShipmentReturnResult>(response, 'Không xử lý được trả lại sau giao.')
+}
+
+export async function submitReopenConfirmedShipment(input: { voucherId: string }) {
+  const response = await fetch(`/api/xuat-hang/${input.voucherId}/reopen`, {
+    method: 'POST',
+  })
+
+  return readXuatHangEnvelope<{ status: string }>(response, 'Không mở lại được phiếu xuất hàng.')
 }
 
 export async function submitDeleteXuatHangVouchers(input: { voucherIds: string[] }) {

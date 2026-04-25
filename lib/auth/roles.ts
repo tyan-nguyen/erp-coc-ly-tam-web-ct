@@ -76,6 +76,10 @@ export function isCommercialRole(role: string | null | undefined) {
   return isBusinessRole(role) || isSalesAccountingRole(role)
 }
 
+export function canViewAuditLog(role: string | null | undefined) {
+  return isAdminRole(role)
+}
+
 export function canAccessNvlStockTruth(role: string | null | undefined) {
   return (
     isQlsxRole(role) ||
@@ -148,6 +152,10 @@ export function canAccessNvlDemand(role: string | null | undefined) {
 
 export function canViewProductionPlan(role: string | null | undefined) {
   return isQlsxRole(role) || isWarehouseRole(role) || isSalesAccountingRole(role) || isAdminRole(role)
+}
+
+export function canViewProductionVarianceReport(role: string | null | undefined) {
+  return isQlsxRole(role) || isWarehouseRole(role) || isPurchaseRole(role) || isAdminRole(role)
 }
 
 export function canManageProductionPlan(role: string | null | undefined) {

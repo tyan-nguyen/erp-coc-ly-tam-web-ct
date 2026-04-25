@@ -3,6 +3,8 @@ import {
   createXuatHangVoucher,
   deleteXuatHangVouchers,
   loadXuatHangVoucherDetail,
+  reopenConfirmedShipmentVoucher,
+  reopenShipmentReturnRequest,
   resolveShipmentSerialScan,
   returnShipmentVoucherSerials,
   saveShipmentReturnRequest,
@@ -148,6 +150,19 @@ export async function executeShipmentReturnRequestMutation(input: {
   })
 }
 
+export async function executeReopenShipmentReturnRequestMutation(input: {
+  supabase: AnySupabase
+  voucherId: string
+  userId: string
+  userRole: string
+}) {
+  return reopenShipmentReturnRequest(input.supabase, {
+    voucherId: input.voucherId,
+    userId: input.userId,
+    userRole: input.userRole,
+  })
+}
+
 export async function executeShipmentReturnMutation(input: {
   supabase: AnySupabase
   voucherId: string
@@ -161,6 +176,19 @@ export async function executeShipmentReturnMutation(input: {
     userRole: input.userRole,
     note: input.body.note,
     items: Array.isArray(input.body.items) ? input.body.items : [],
+  })
+}
+
+export async function executeReopenConfirmedShipmentMutation(input: {
+  supabase: AnySupabase
+  voucherId: string
+  userId: string
+  userRole: string
+}) {
+  return reopenConfirmedShipmentVoucher(input.supabase, {
+    voucherId: input.voucherId,
+    userId: input.userId,
+    userRole: input.userRole,
   })
 }
 

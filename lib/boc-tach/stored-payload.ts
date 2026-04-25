@@ -231,6 +231,7 @@ export function mapStoredBocTachToPayload(
       ...base.header,
       da_id: String(header.da_id || ''),
       kh_id: String(header.kh_id || ''),
+      ma_coc: String(header.ma_coc || bocMeta.ma_coc || ''),
       loai_coc: String(header.loai_coc || base.header.loai_coc),
       do_ngoai: toNumber(header.do_ngoai, toNumber(header.do_mm, base.header.do_ngoai)),
       chieu_day: toNumber(header.chieu_day, toNumber(header.t_mm, base.header.chieu_day)),
@@ -322,6 +323,8 @@ export function mapStoredBocTachToPayload(
         ? segments.map((seg) => {
             const dm = (seg.dinh_muc_nvl || {}) as Record<string, unknown>
             return {
+              template_id: String(seg.template_id || ''),
+              ma_coc: String(seg.ma_coc || header.ma_coc || bocMeta.ma_coc || ''),
               ten_doan: String(seg.ten_doan || ''),
               len_m: toNumber(dm.len_m, toNumber(seg.len_m, 0)),
               cnt: toNumber(dm.cnt, 0),

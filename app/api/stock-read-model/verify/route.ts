@@ -3,6 +3,8 @@ import { getCurrentSessionProfile } from '@/lib/auth/session'
 import { isAdminRole } from '@/lib/auth/roles'
 import { createClient } from '@/lib/supabase/server'
 import {
+  loadFinishedGoodsCodeMappingDiagnostics,
+  repairFinishedGoodsTemplateCodeMapping,
   refreshFinishedGoodsStockReadModel,
   verifyFinishedGoodsStockReadModel,
 } from '@/lib/ton-kho-thanh-pham/repository'
@@ -19,8 +21,11 @@ export async function POST() {
 
     const supabase = await createClient()
 
+    const finishedGoodsCodeRepair = await repairFinishedGoodsTemplateCodeMapping(supabase)
+
     await refreshFinishedGoodsStockReadModel(supabase)
     const finishedGoods = await verifyFinishedGoodsStockReadModel(supabase)
+    const finishedGoodsCodeMapping = await loadFinishedGoodsCodeMappingDiagnostics(supabase)
 
     await refreshNvlStockReadModel(supabase)
     const nvlStock = await verifyNvlStockReadModel(supabase)
@@ -29,9 +34,11 @@ export async function POST() {
       ok: true,
       data: {
         finishedGoods,
+        finishedGoodsCodeRepair,
+        finishedGoodsCodeMapping,
         nvlStock,
         switched:
-          finishedGoods.matched && nvlStock.matched
+          finishedGoods.matched && finishedGoodsCodeMapping.ready && nvlStock.matched
             ? 'verified_read_models_enabled'
             : 'legacy_fallback_kept',
       },

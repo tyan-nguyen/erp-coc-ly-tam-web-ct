@@ -39,8 +39,8 @@ export function DmCocTemplateFields({
     [chieuDay, cuongDo, doNgoai, macThep]
   )
   const maCocPreview = useMemo(
-    () => codePreviewOverride?.trim() || buildMaCocPreview(macBeTong, macThep, doNgoai),
-    [codePreviewOverride, doNgoai, macBeTong, macThep]
+    () => codePreviewOverride?.trim() || buildMaCocPreview(macBeTong, macThep, doNgoai, chieuDay),
+    [chieuDay, codePreviewOverride, doNgoai, macBeTong, macThep]
   )
 
   return (
@@ -377,12 +377,18 @@ function buildLoaiCocPreview(
   return `${normalizedCuongDo} - ${normalizedMacThep}${diameter} - ${thickness}`
 }
 
-function buildMaCocPreview(macBeTong: string | undefined, macThep: string | undefined, doNgoai: string | undefined) {
+function buildMaCocPreview(
+  macBeTong: string | undefined,
+  macThep: string | undefined,
+  doNgoai: string | undefined,
+  chieuDay: string | undefined
+) {
   const mac = String(macBeTong ?? '').trim()
   const normalizedMacThep = normalizeMacThep(macThep)
   const diameter = String(doNgoai ?? '').trim()
-  if (!mac || !normalizedMacThep || !diameter) return '-'
-  return `M${mac} - ${normalizedMacThep}${diameter} - ?`
+  const thickness = String(chieuDay ?? '').trim()
+  if (!mac || !normalizedMacThep || !diameter || !thickness) return '-'
+  return `M${mac} - ${normalizedMacThep}${diameter} - ${thickness} - ?`
 }
 
 function Field({

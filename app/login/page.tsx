@@ -1,5 +1,6 @@
 'use client'
 
+import { Suspense } from 'react'
 import Image from 'next/image'
 import type { CSSProperties, FormEvent } from 'react'
 import { useState } from 'react'
@@ -8,7 +9,7 @@ import { createClient } from '@/lib/supabase/client'
 
 const DEFAULT_LOGIN_DOMAIN = 'nguyentrinh.com.vn'
 
-export default function LoginPage() {
+function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const supabase = createClient()
@@ -141,5 +142,13 @@ export default function LoginPage() {
         </form>
       </div>
     </main>
+  )
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <LoginPage />
+    </Suspense>
   )
 }

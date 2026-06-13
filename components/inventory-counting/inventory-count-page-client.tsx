@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { normalizeRole } from '@/lib/auth/roles'
 import { fetchInventoryCountDetail, submitCreateInventoryCountSheet } from '@/lib/inventory-counting/client-api'
@@ -91,6 +91,100 @@ function buildEmptyDraftLine(): InventoryCountDraftLine {
     allowedLossPct: 0,
     note: '',
   }
+}
+
+function normalizeSearchText(value: string) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+function InventoryOptionSearchField(props: {
+  value: string
+  options: InventoryCountCatalogOption[]
+  onChange: (value: string) => void
+}) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const selectedOption = props.options.find((option) => option.value === props.value) || null
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!wrapperRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [])
+
+  const filteredOptions = useMemo(() => {
+    const keyword = normalizeSearchText(query)
+    if (!keyword) return props.options.slice(0, 30)
+    return props.options
+      .filter((option) =>
+        normalizeSearchText(`${option.itemCode} ${option.itemName} ${option.itemGroup}`).includes(keyword)
+      )
+      .slice(0, 30)
+  }, [props.options, query])
+
+  const displayValue = open
+    ? query
+    : selectedOption
+      ? `${selectedOption.itemCode} - ${selectedOption.itemName}`
+      : ''
+
+  return (
+    <div ref={wrapperRef} className="relative min-w-[240px]">
+      <input
+        type="text"
+        value={displayValue}
+        onFocus={() => {
+          setOpen(true)
+          setQuery(selectedOption ? `${selectedOption.itemCode} - ${selectedOption.itemName}` : '')
+        }}
+        onChange={(event) => {
+          setOpen(true)
+          setQuery(event.target.value)
+        }}
+        placeholder="Gõ để tìm mặt hàng..."
+        className="w-full rounded-xl border px-3 py-2"
+        style={{ borderColor: 'var(--color-border)' }}
+        aria-label="Tìm và chọn mặt hàng"
+      />
+      {open ? (
+        <div
+          className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-72 overflow-auto rounded-xl border bg-white shadow-lg"
+          style={{ borderColor: 'var(--color-border)' }}
+        >
+          {filteredOptions.length ? (
+            filteredOptions.map((option) => (
+              <button
+                key={`${option.itemType}-${option.value}`}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  props.onChange(option.value)
+                  setQuery(`${option.itemCode} - ${option.itemName}`)
+                  setOpen(false)
+                }}
+                className="block w-full px-3 py-2 text-left text-sm hover:bg-black/[0.03]"
+              >
+                <div className="font-medium">{option.itemCode} - {option.itemName}</div>
+                <div className="app-muted mt-1 text-xs">{option.itemGroup} · Tồn hệ thống: {formatNumber(option.systemQty)}</div>
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-2 text-sm app-muted">Không tìm thấy mặt hàng phù hợp.</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 export function InventoryCountPageClient(props: { pageData: InventoryCountingPageData; currentRole: string }) {
@@ -327,19 +421,11 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
                   lines.map((line) => (
                     <tr key={line.id} className="border-t" style={{ borderColor: 'var(--color-border)' }}>
                       <td className="px-4 py-3 align-middle">
-                        <select
+                        <InventoryOptionSearchField
                           value={line.itemId}
-                          onChange={(event) => updateLineItem(line.id, event.target.value)}
-                          className="w-full min-w-[240px] rounded-xl border px-3 py-2"
-                          style={{ borderColor: 'var(--color-border)' }}
-                        >
-                          <option value="">Chọn mặt hàng...</option>
-                          {props.pageData.catalogOptions.map((option) => (
-                            <option key={`${option.itemType}-${option.value}`} value={option.value}>
-                              {option.itemCode} - {option.itemName}
-                            </option>
-                          ))}
-                        </select>
+                          options={props.pageData.catalogOptions}
+                          onChange={(value) => updateLineItem(line.id, value)}
+                        />
                       </td>
                       <td className="px-4 py-3 align-middle whitespace-nowrap">{line.itemGroup || '-'}</td>
                       <td className="px-4 py-3 align-middle whitespace-nowrap">{line.unit || '-'}</td>
@@ -349,12 +435,19 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
                           type="number"
                           min="0"
                           step="0.001"
-                          value={line.countedQty}
+                          value={Number(line.countedQty || 0) === 0 ? '' : String(line.countedQty)}
                           onChange={(event) => {
                             const nextValue = Number(event.target.value)
                             updateLine(line.id, (current) => ({
                               ...current,
                               countedQty: Number.isFinite(nextValue) ? nextValue : 0,
+                            }))
+                          }}
+                          onBlur={() => {
+                            if (Number(line.countedQty || 0) !== 0) return
+                            updateLine(line.id, (current) => ({
+                              ...current,
+                              countedQty: 0,
                             }))
                           }}
                           className="w-28 rounded-xl border px-3 py-2"
@@ -505,8 +598,17 @@ export function InventoryCountPageClient(props: { pageData: InventoryCountingPag
                       {activeSheetDetail.countType === 'OPENING_BALANCE' ? 'Nhập tồn đầu kỳ' : 'Kiểm kê vận hành'} · {formatDateLabel(activeSheetDetail.countDate)} · {formatStatusLabel(activeSheetDetail.status)}
                     </div>
                   </div>
-                  <div className="text-sm app-muted">
-                    Số dòng: {activeSheetDetail.lines.length}
+                  <div className="flex items-center gap-3">
+                    <div className="text-sm app-muted">
+                      Số dòng: {activeSheetDetail.lines.length}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/ton-kho/kiem-ke/${activeSheetDetail.countSheetId}`)}
+                      className="app-outline rounded-xl px-3 py-2 text-sm font-semibold"
+                    >
+                      Mở phiếu
+                    </button>
                   </div>
                 </div>
 

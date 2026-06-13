@@ -273,13 +273,20 @@ export function InventoryCountDetailClient(props: { detail: InventoryCountDetail
                         <input
                           className="w-28 rounded-lg border px-3 py-2 text-right"
                           style={{ borderColor: 'var(--color-border)' }}
-                          value={current.countedQty}
+                          value={current.countedQty === '0' ? '' : current.countedQty}
                           onChange={(event) =>
                             setLineState((prev) => ({
                               ...prev,
                               [line.countLineId]: { ...current, countedQty: event.target.value },
                             }))
                           }
+                          onBlur={(event) => {
+                            if (event.target.value.trim()) return
+                            setLineState((prev) => ({
+                              ...prev,
+                              [line.countLineId]: { ...current, countedQty: '0' },
+                            }))
+                          }}
                         />
                       ) : (
                         <span className="font-semibold">{formatNumber(countedQty)}</span>

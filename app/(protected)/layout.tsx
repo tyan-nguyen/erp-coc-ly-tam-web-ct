@@ -188,21 +188,13 @@ export default async function ProtectedLayout({
         {
           label: 'Đơn hàng',
           children: [
+            { href: '/don-hang', label: 'Danh sách đơn hàng' },
             { href: '/don-hang/bao-gia', label: 'Danh sách báo giá' },
-            { href: '/don-hang/phieu-xuat', label: 'Phiếu xuất hàng cọc TP' },
-            { href: '/don-hang/phieu-xuat/nvl', label: 'Phiếu xuất hàng NVL' },
           ],
         },
         {
           label: 'Tồn kho',
-          children: buildInventoryChildren({ includeInternalScan: false, includeReprintLabels: false }),
-        },
-        {
-          label: 'Kiểm kê',
-          children: [
-            { href: '/ton-kho/kiem-ke', label: 'Vật tư' },
-            { href: '/ton-kho/thanh-pham/kiem-ke', label: 'Cọc thành phẩm' },
-          ],
+          children: [{ href: '/ton-kho/thanh-pham', label: 'Tồn cọc thành phẩm' }],
         },
       ]
     : purchaseViewer

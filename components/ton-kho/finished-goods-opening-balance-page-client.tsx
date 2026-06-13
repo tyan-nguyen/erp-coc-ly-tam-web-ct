@@ -267,18 +267,8 @@ export function FinishedGoodsOpeningBalancePageClient(props: {
         )}
 
         {props.embedded ? (
-          <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-            <div className="max-w-3xl">
-              <h2 className="text-xl font-semibold">Nhập tồn đầu kỳ</h2>
-              <p className="app-muted mt-2 text-sm">
-                Dùng cho cọc cũ chưa có serial trước khi go-live. Hệ thống sẽ tạo lô legacy và sinh serial để in tem ngay.
-              </p>
-            </div>
-            <div className="rounded-2xl border px-4 py-3 text-right" style={{ borderColor: 'var(--color-border)' }}>
-              <div className="app-muted text-xs uppercase tracking-[0.18em]">Chất lượng đang chọn</div>
-              <div className="mt-2 text-base font-semibold">{activeQuality.label}</div>
-              <div className="app-muted mt-1 text-xs">{activeQuality.hint}</div>
-            </div>
+          <div className="mb-6">
+            <h2 className="text-xl font-semibold">Nhập tồn đầu kỳ</h2>
           </div>
         ) : null}
 

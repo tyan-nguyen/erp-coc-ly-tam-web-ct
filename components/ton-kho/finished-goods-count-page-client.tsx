@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { submitCreateFinishedGoodsCountSheet } from '@/lib/finished-goods-counting/client-api'
 import { FinishedGoodsOpeningBalancePageClient } from '@/components/ton-kho/finished-goods-opening-balance-page-client'
@@ -92,6 +92,100 @@ function buildEmptyDraftLine(): FinishedGoodsCountDraftLine {
     systemQty: 0,
     note: '',
   }
+}
+
+function normalizeSearchText(value: string) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+function FinishedGoodsOptionSearchField(props: {
+  value: string
+  options: FinishedGoodsCountCatalogOption[]
+  onChange: (value: string) => void
+}) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const selectedOption = props.options.find((option) => option.itemKey === props.value) || null
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!wrapperRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [])
+
+  const filteredOptions = useMemo(() => {
+    const keyword = normalizeSearchText(query)
+    if (!keyword) return props.options.slice(0, 30)
+    return props.options
+      .filter((option) =>
+        normalizeSearchText(
+          `${option.itemLabel} ${option.loaiCoc} ${option.tenDoan} ${option.chieuDaiM} ${option.maCoc}`
+        ).includes(keyword)
+      )
+      .slice(0, 30)
+  }, [props.options, query])
+
+  const displayValue = open ? query : selectedOption?.itemLabel || ''
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <input
+        type="text"
+        value={displayValue}
+        onFocus={() => {
+          setOpen(true)
+          setQuery(selectedOption?.itemLabel || '')
+        }}
+        onChange={(event) => {
+          setOpen(true)
+          setQuery(event.target.value)
+        }}
+        placeholder="Gõ để tìm loại cọc / đoạn / chiều dài..."
+        className="w-full rounded-xl border px-3 py-2.5"
+        style={{ borderColor: 'var(--color-border)' }}
+        aria-label="Tìm và chọn pool kiểm kê"
+      />
+      {open ? (
+        <div
+          className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 max-h-72 overflow-auto rounded-xl border bg-white shadow-lg"
+          style={{ borderColor: 'var(--color-border)' }}
+        >
+          {filteredOptions.length ? (
+            filteredOptions.map((option) => (
+              <button
+                key={option.itemKey}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  props.onChange(option.itemKey)
+                  setQuery(option.itemLabel)
+                  setOpen(false)
+                }}
+                className="block w-full px-3 py-2 text-left text-sm hover:bg-black/[0.03]"
+              >
+                <div className="font-medium">{option.itemLabel}</div>
+                <div className="app-muted mt-1 text-xs">
+                  Hệ thống: {formatNumber(option.systemQty)} · Dự án: {formatNumber(option.projectQty)} · Khách lẻ: {formatNumber(option.retailQty)}
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-2 text-sm app-muted">Không tìm thấy pool cọc phù hợp.</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 export function FinishedGoodsCountPageClient(props: {
@@ -301,21 +395,11 @@ export function FinishedGoodsCountPageClient(props: {
                 lines.map((line) => (
                   <tr key={line.id} style={{ borderTop: '1px solid var(--color-border)' }}>
                     <td className="px-4 py-4">
-                      <select
+                      <FinishedGoodsOptionSearchField
                         value={line.itemKey}
-                        onChange={(event) => updateLineItem(line.id, event.target.value)}
-                        className="w-full rounded-xl border px-3 py-2.5"
-                        style={{ borderColor: 'var(--color-border)' }}
-                        aria-label="Chọn pool kiểm kê"
-                      >
-                        <option value="">Chọn loại cọc / đoạn / chiều dài...</option>
-                        {props.pageData.catalogOptions.map((option) => (
-                          <option key={option.itemKey} value={option.itemKey}>
-                            {option.itemLabel} · Hệ thống: {formatNumber(option.systemQty)} · Dự án: {formatNumber(option.projectQty)} · Khách lẻ:{' '}
-                            {formatNumber(option.retailQty)}
-                          </option>
-                        ))}
-                      </select>
+                        options={props.pageData.catalogOptions}
+                        onChange={(value) => updateLineItem(line.id, value)}
+                      />
                     </td>
                     <td className="px-4 py-4 text-right">{formatNumber(line.systemQty)}</td>
                     <td className="px-4 py-4 text-right">
